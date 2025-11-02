@@ -4,3 +4,6 @@ pandas
 librosa==0.10.1
 joblib
 matplotlib
+scipy
+soundfile
+setuptools
