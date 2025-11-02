@@ -1,12 +1,11 @@
 # =========================================
-# APP STREAMLIT: Prediksi Suara Buka / Tutup (Gabungan UI & Fungsi Versi Stabil)
+# APP STREAMLIT: Prediksi Suara Buka / Tutup (Versi Stabil)
 # =========================================
 
 import streamlit as st
 import numpy as np
 import pandas as pd
 import librosa
-import librosa.display
 import joblib
 import os
 import matplotlib.pyplot as plt
@@ -37,7 +36,7 @@ def load_model_scaler():
 model, scaler = load_model_scaler()
 
 # ===============================
-# Fungsi Ekstraksi Fitur (pakai versi yang berhasil)
+# Fungsi Ekstraksi Fitur
 # ===============================
 def extract_features(file_path):
     y, sr = librosa.load(file_path, sr=22050)
@@ -66,8 +65,7 @@ def extract_features(file_path):
         if i <= mfcc.shape[0]:
             features[f"mfcc_{i}"] = np.mean(mfcc[i - 1])
 
-    return features
-
+    return features, y, sr
 
 # ===============================
 # Header aplikasi (UI modern)
@@ -99,7 +97,7 @@ if uploaded_file is not None:
 
         # Ekstrak fitur
         with st.spinner("🔍 Mengekstrak fitur dari audio..."):
-            features = extract_features(temp_path)
+            features, y, sr = extract_features(temp_path)
             features_df = pd.DataFrame([features])
             features_scaled = scaler.transform(features_df)
 
@@ -132,10 +130,9 @@ if uploaded_file is not None:
         st.markdown("#### 🔍 Probabilitas Tiap Kelas:")
         st.dataframe(prob_df, use_container_width=True)
 
-        # Waveform audio
-        y, sr = librosa.load(temp_path, sr=22050)
+        # Waveform audio (manual)
         fig, ax = plt.subplots(figsize=(8, 2.5))
-        librosa.display.waveshow(y, sr=sr, ax=ax)
+        ax.plot(np.arange(len(y)) / sr, y, color='dodgerblue')
         ax.set_title("Waveform Audio")
         ax.set_xlabel("Waktu (detik)")
         ax.set_ylabel("Amplitudo")
