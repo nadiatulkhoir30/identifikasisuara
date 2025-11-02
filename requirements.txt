@@ -3,7 +3,7 @@ numpy
 pandas
 librosa==0.10.1
 joblib
-matplotlib
+matplotlib>=3.6
 scipy
 soundfile
 setuptools
