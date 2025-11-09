@@ -10,3 +10,5 @@ setuptools
 seaborn
 streamlit-webrtc
 av
+pydub
+ffmpeg-python
