@@ -56,9 +56,8 @@ def mfcc_features(y, sr, n_mfcc=13):
     mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc)
     return np.mean(mfccs, axis=1)
 
-def extract_features(file_path=None, y=None, sr=22050):
-    if file_path:
-        y, sr = librosa.load(file_path, sr=sr)
+def extract_features(file_path):
+    y, sr = librosa.load(file_path, sr=22050)
     features = [
         zero_crossing_rate(y),
         rms(y),
@@ -73,8 +72,23 @@ def extract_features(file_path=None, y=None, sr=22050):
 # ============================================================
 # Prediksi (Locked Speaker: Nadia & Vanisa)
 # ============================================================
-def predict_audio_array(y, sr=22050, threshold=0.6):
-    features_scaled = scaler.transform(extract_features(y=y, sr=sr)[0])
+def predict_audio(file_path=None, y=None, sr=22050, threshold=0.6):
+    if file_path:
+        features, y, sr = extract_features(file_path)
+    else:
+        # Jika input berupa array y langsung dari voice
+        features = [
+            zero_crossing_rate(y),
+            rms(y),
+            spectral_centroid(y, sr),
+            spectral_bandwidth(y, sr),
+            spectral_contrast(y, sr),
+        ]
+        mfccs = mfcc_features(y, sr)
+        features.extend(mfccs.tolist())
+        features = np.array(features).reshape(1, -1)
+
+    features_scaled = scaler.transform(features)
     probs = model.predict_proba(features_scaled)[0]
     labels = model.classes_
 
@@ -96,14 +110,13 @@ def predict_audio_array(y, sr=22050, threshold=0.6):
 # ============================================================
 # UI Streamlit
 # ============================================================
-st.title("🎧 Prediksi Suara Buka/Tutup (Nadia & Vanisa Only)")
+st.title("🎧 Prediksi Suara Buka/Tutup")
 st.markdown("""
-<p style="font-size:16px;">
-Aplikasi ini hanya menerima suara dari <b>Nadia</b> dan <b>Vanisa</b>.<br>
-Jika suara lain terdeteksi, hasil akan menjadi <b>Unknown</b>.
-</p>
+<p style="font-size:16px;">Aplikasi ini hanya menerima suara dari <b>Nadia</b> dan <b>Vanisa</b>.<br>
+Jika suara lain terdeteksi, hasil akan menjadi <b>Unknown</b>.</p>
 """, unsafe_allow_html=True)
 
+# 🧩 Slider threshold
 st.sidebar.header("⚙️ Pengaturan Model")
 threshold = st.sidebar.slider(
     "Ambang Confidence (Threshold)",
@@ -115,7 +128,7 @@ threshold = st.sidebar.slider(
 )
 
 # ============================================================
-# Upload File Audio
+# Upload file audio
 # ============================================================
 uploaded_file = st.file_uploader("🎵 Upload file audio (.wav)", type=["wav"])
 
@@ -127,15 +140,12 @@ if uploaded_file is not None:
     st.audio(temp_path, format="audio/wav")
 
     with st.spinner("⏳ Memproses audio..."):
-        speaker, status, prob, probs, labels, y, sr = predict_audio_array(librosa.load(temp_path)[0], 22050, threshold)
+        speaker, status, prob, probs, labels, y, sr = predict_audio(file_path=temp_path, threshold=threshold)
 
     os.remove(temp_path)
-else:
-    y = None
-    sr = 22050
 
 # ============================================================
-# Rekam Suara Langsung (WebRTC)
+# Rekam suara langsung (voice)
 # ============================================================
 st.markdown("### 🎤 Rekam Suara Langsung")
 webrtc_ctx = webrtc_streamer(
@@ -157,10 +167,10 @@ if webrtc_ctx.audio_receiver:
         sr = 44100
 
 # ============================================================
-# Tampilkan Hasil Prediksi
+# Tampilkan hasil prediksi (sama seperti versi upload)
 # ============================================================
-if y is not None:
-    speaker, status, prob, probs, labels, y_proc, sr_proc = predict_audio_array(y, sr, threshold)
+if uploaded_file is not None or (webrtc_ctx.audio_receiver and y is not None):
+    speaker, status, prob, probs, labels, y_proc, sr_proc = predict_audio(y=y, sr=sr, threshold=threshold)
 
     st.markdown("---")
     st.subheader("🎯 Hasil Prediksi")
@@ -173,7 +183,7 @@ if y is not None:
 
     st.metric("Confidence (%)", f"{prob*100:.2f}%")
 
-    # ============================= Tabel Probabilitas
+    # Tabel Probabilitas
     prob_df = pd.DataFrame({
         "Kelas": labels,
         "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
@@ -187,18 +197,18 @@ if y is not None:
         ])
     )
 
-    # ============================= Visualisasi Audio
+    # Visualisasi Audio
     st.subheader("📈 Waveform Audio")
     fig, ax = plt.subplots(figsize=(8, 3))
-    librosa.display.waveshow(y, sr=sr, ax=ax)
+    librosa.display.waveshow(y_proc, sr=sr_proc, ax=ax)
     ax.set_title("Waveform Audio", fontsize=12)
     st.pyplot(fig)
 
     st.subheader("🎛️ Mel Spectrogram")
-    S = librosa.feature.melspectrogram(y=y, sr=sr)
+    S = librosa.feature.melspectrogram(y=y_proc, sr=sr_proc)
     S_dB = librosa.power_to_db(S, ref=np.max)
     fig, ax = plt.subplots(figsize=(10, 4))
-    img = librosa.display.specshow(S_dB, sr=sr, x_axis='time', y_axis='mel', ax=ax)
+    img = librosa.display.specshow(S_dB, sr=sr_proc, x_axis='time', y_axis='mel', ax=ax)
     fig.colorbar(img, ax=ax, format='%+2.0f dB')
     ax.set_title("Mel Spectrogram", fontsize=12)
     st.pyplot(fig)
