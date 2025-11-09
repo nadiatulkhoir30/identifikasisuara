@@ -1,46 +1,16 @@
-# ============================================================
-# 🎧 STREAMLIT APP — Prediksi Suara Buka/Tutup (Nadia & Vanisa)
-# ============================================================
-
+# ==================================================
+# 🔹 IMPORT LIBRARY
+# ==================================================
 import streamlit as st
 import numpy as np
-import pandas as pd
 import librosa
-import librosa.display
 import joblib
 import os
-import matplotlib.pyplot as plt
-import seaborn as sns
+import tempfile
 
-# ============================================================
-# Konfigurasi Streamlit
-# ============================================================
-st.set_page_config(
-    page_title="Prediksi Suara Buka/Tutup",
-    page_icon="🎵",
-    layout="centered",
-)
-
-st.title("🎧 Prediksi Suara Buka/Tutup")
-st.markdown(
-    "Aplikasi ini mendeteksi siapa yang berbicara dan apakah suaranya **Buka** atau **Tutup**. "
-    "Kamu bisa mengatur **threshold kepercayaan** dan mengunci hanya untuk **Nadia & Vanisa**."
-)
-
-# ============================================================
-# Load Model & Scaler
-# ============================================================
-@st.cache_resource
-def load_model_scaler():
-    model = joblib.load("best_audio_model.pkl")
-    scaler = joblib.load("scaler_audio.pkl")
-    return model, scaler
-
-model, scaler = load_model_scaler()
-
-# ============================================================
-# Fungsi Ekstraksi Fitur
-# ============================================================
+# ==================================================
+# 🔹 FUNGSI EKSTRAKSI FITUR AUDIO
+# ==================================================
 def zero_crossing_rate(y):
     return np.mean(librosa.feature.zero_crossing_rate(y=y).T, axis=0)[0]
 
@@ -61,6 +31,7 @@ def mfcc_features(y, sr, n_mfcc=13):
     return np.mean(mfccs, axis=1)
 
 def extract_features(file_path):
+    """Ekstraksi fitur untuk satu file audio"""
     y, sr = librosa.load(file_path, sr=22050)
     features = [
         zero_crossing_rate(y),
@@ -71,107 +42,73 @@ def extract_features(file_path):
     ]
     mfccs = mfcc_features(y, sr)
     features.extend(mfccs.tolist())
-    return np.array(features).reshape(1, -1), y, sr
+    return np.array(features).reshape(1, -1)
 
-# ============================================================
-# Fungsi Prediksi
-# ============================================================
-def predict_speaker(file_path, threshold=0.7, lock_speakers=True):
-    features, y, sr = extract_features(file_path)
+# ==================================================
+# 🔹 LOAD MODEL & SCALER
+# ==================================================
+@st.cache_resource
+def load_model_and_scaler():
+    model = joblib.load("best_audio_model.pkl")
+    scaler = joblib.load("scaler_audio.pkl")
+    return model, scaler
+
+model, scaler = load_model_and_scaler()
+
+# ==================================================
+# 🔹 PREDIKSI SPEAKER DENGAN THRESHOLD
+# ==================================================
+def predict_speaker(file_path, threshold=0.7):
+    features = extract_features(file_path)
 
     if features.shape[1] != scaler.n_features_in_:
-        return None, None, None, None, y, sr, "❌ Jumlah fitur tidak cocok dengan scaler."
+        st.error(f"Jumlah fitur {features.shape[1]} tidak cocok dengan scaler ({scaler.n_features_in_})")
+        return None, None
 
     features_scaled = scaler.transform(features)
     probs = model.predict_proba(features_scaled)[0]
-    labels = model.classes_
-
     max_prob = np.max(probs)
-    pred_label = labels[np.argmax(probs)]
-    speaker_name = pred_label.split("_")[0].lower()
+    pred_label = model.classes_[np.argmax(probs)]
 
-    allowed = ["nadia", "vanisa"]
-
-    # 🔒 Kunci speaker & threshold
-    if (lock_speakers and speaker_name not in allowed) or (max_prob < threshold):
-        speaker_name = "Unknown"
-        status = "Tidak diketahui"
+    if max_prob < threshold:
+        return "Tidak dikenal", max_prob
     else:
-        status = pred_label.split("_")[1].capitalize() if "_" in pred_label else "-"
+        return pred_label, max_prob
 
-    return speaker_name.capitalize(), status, max_prob, probs, labels, y, sr, None
+# ==================================================
+# 🔹 STREAMLIT APP
+# ==================================================
+st.title("🎙️ Voice Recognition App")
+st.write("Unggah file audio untuk mendeteksi siapa speaker-nya.")
 
-# ============================================================
-# UI Streamlit
-# ============================================================
+# Upload file audio
+uploaded_file = st.file_uploader("Pilih file audio (.wav)", type=["wav", "mp3", "ogg"])
 
-col1, col2 = st.columns(2)
-threshold = col1.slider("🎚️ Threshold Kepercayaan", 0.0, 1.0, 0.7, 0.01)
-lock_speakers = col2.checkbox("🔒 Kunci hanya untuk Nadia & Vanisa", value=True)
-
-st.markdown("### 📂 Upload File Audio")
-uploaded_file = st.file_uploader("Unggah file audio (.wav)", type=["wav"])
+threshold = st.slider("Threshold Kepercayaan", 0.0, 1.0, 0.7, 0.05)
 
 if uploaded_file is not None:
-    temp_path = "temp_audio.wav"
-    with open(temp_path, "wb") as f:
-        f.write(uploaded_file.read())
+    # Simpan file sementara
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+        tmp_file.write(uploaded_file.read())
+        temp_path = tmp_file.name
 
-    st.audio(temp_path, format="audio/wav")
+    # Tampilkan audio player
+    st.audio(uploaded_file, format="audio/wav")
 
-    with st.spinner("⏳ Menganalisis audio..."):
-        speaker, status, prob, probs, labels, y, sr, err = predict_speaker(
-            temp_path, threshold=threshold, lock_speakers=lock_speakers
-        )
+    # Tombol prediksi
+    if st.button("🔍 Prediksi Speaker"):
+        with st.spinner("Menganalisis audio..."):
+            pred_label, confidence = predict_speaker(temp_path, threshold)
 
-    if err:
-        st.error(err)
-    else:
-        st.markdown("---")
-        st.subheader("🎯 Hasil Prediksi")
-        col1, col2 = st.columns(2)
-        col1.metric("Speaker", speaker)
-        col2.metric("Status", status)
-        st.metric("Confidence", f"{prob*100:.2f}%")
+        if pred_label is None:
+            st.error("Gagal melakukan prediksi. Periksa log atau model.")
+        elif pred_label == "Tidak dikenal":
+            st.warning(f"❌ Speaker tidak dikenal (confidence: {confidence:.2f})")
+        else:
+            st.success(f"✅ Prediksi Speaker: **{pred_label}** (confidence: {confidence:.2f})")
 
-        # 📊 Probabilitas
-        prob_df = pd.DataFrame({
-            "Kelas": labels,
-            "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
-        }).sort_values("Probabilitas (%)", ascending=False)
+        # Hapus file sementara
+        os.remove(temp_path)
 
-        st.markdown("#### 📊 Probabilitas Tiap Kelas")
-        st.dataframe(prob_df, use_container_width=True)
-
-        # 🎵 Waveform
-        st.subheader("📈 Waveform Audio")
-        fig, ax = plt.subplots(figsize=(8, 3))
-        librosa.display.waveshow(y, sr=sr, ax=ax)
-        ax.set_title("Waveform Audio")
-        st.pyplot(fig)
-
-        # 🎛️ Mel Spectrogram
-        st.subheader("🎛️ Mel Spectrogram")
-        S = librosa.feature.melspectrogram(y=y, sr=sr)
-        S_dB = librosa.power_to_db(S, ref=np.max)
-        fig, ax = plt.subplots(figsize=(10, 4))
-        img = librosa.display.specshow(S_dB, sr=sr, x_axis='time', y_axis='mel', ax=ax)
-        fig.colorbar(img, ax=ax, format='%+2.0f dB')
-        ax.set_title("Mel Spectrogram")
-        st.pyplot(fig)
-
-        # 📉 Barplot Probabilitas
-        st.subheader("📉 Distribusi Probabilitas")
-        plt.figure(figsize=(6, 4))
-        sns.barplot(x="Kelas", y="Probabilitas (%)", data=prob_df)
-        plt.xticks(rotation=45)
-        plt.ylim(0, 100)
-        st.pyplot(plt)
-
-    # tombol reset
-    if st.button("🔁 Unggah File Baru"):
-        st.experimental_rerun()
-
-    os.remove(temp_path)
-else:
-    st.info("📂 Silakan upload file audio terlebih dahulu.")
+st.markdown("---")
+st.caption("Developed with ❤️ using Streamlit & Librosa")
