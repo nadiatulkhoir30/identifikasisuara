@@ -12,3 +12,4 @@ streamlit-webrtc
 av
 pydub
 ffmpeg-python
+sounddevice
