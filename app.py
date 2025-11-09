@@ -12,7 +12,7 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 from io import BytesIO
-from streamlit_mic_recorder import mic_recorder
+import soundfile as sf
 
 # ============================================================
 # Konfigurasi Streamlit
@@ -24,10 +24,10 @@ st.set_page_config(
 )
 
 st.title("🎧 Prediksi Suara Buka/Tutup")
-st.markdown("""
-Aplikasi ini memprediksi **siapa yang berbicara (Nadia/Vanisa)** dan status suaranya (**Buka/Tutup**).  
-Kamu bisa **atur threshold** dan juga **rekam langsung dari microphone** 🎙️
-""")
+st.markdown(
+    "Aplikasi ini mendeteksi siapa yang berbicara dan apakah suaranya **Buka** atau **Tutup**. "
+    "Kamu bisa mengatur **threshold kepercayaan** dan mengunci hanya untuk **Nadia & Vanisa**."
+)
 
 # ============================================================
 # Load Model & Scaler
@@ -94,6 +94,7 @@ def predict_speaker(file_path, threshold=0.7, lock_speakers=True):
 
     allowed = ["nadia", "vanisa"]
 
+    # 🔒 Kunci speaker & threshold
     if (lock_speakers and speaker_name not in allowed) or (max_prob < threshold):
         speaker_name = "Unknown"
         status = "Tidak diketahui"
@@ -103,40 +104,53 @@ def predict_speaker(file_path, threshold=0.7, lock_speakers=True):
     return speaker_name.capitalize(), status, max_prob, probs, labels, y, sr, None
 
 # ============================================================
-# UI — Upload / Rekam Audio
+# UI Streamlit
 # ============================================================
+
 col1, col2 = st.columns(2)
 threshold = col1.slider("🎚️ Threshold Kepercayaan", 0.0, 1.0, 0.7, 0.01)
 lock_speakers = col2.checkbox("🔒 Kunci hanya untuk Nadia & Vanisa", value=True)
 
-st.markdown("### 🎙️ Input Suara")
-rec_option = st.radio("Pilih metode input:", ["Upload file", "Rekam langsung"])
+st.markdown("### 🎙️ Pilih Input Suara")
+mode = st.radio("Pilih metode input:", ["Upload File", "Rekam Langsung"], horizontal=True)
 
-audio_bytes = None
+audio_data = None
 
-if rec_option == "Upload file":
+# ============ Mode Upload File ============
+if mode == "Upload File":
     uploaded_file = st.file_uploader("📂 Upload file audio (.wav)", type=["wav"])
     if uploaded_file is not None:
-        audio_bytes = uploaded_file.read()
-        st.audio(audio_bytes, format="audio/wav")
+        temp_path = "temp_audio.wav"
+        with open(temp_path, "wb") as f:
+            f.write(uploaded_file.read())
+        audio_data = temp_path
+        st.audio(temp_path, format="audio/wav")
 
-else:
-    st.info("Tekan tombol di bawah untuk merekam suara (maks 5 detik).")
-    audio_bytes = mic_recorder(start_prompt="🎤 Mulai Rekam", stop_prompt="⏹️ Berhenti Rekam", just_once=True)
-    if audio_bytes is not None:
-        st.audio(audio_bytes, format="audio/wav")
+# ============ Mode Rekam Langsung ============
+elif mode == "Rekam Langsung":
+    st.markdown(
+        """
+        🎤 Klik tombol di bawah untuk merekam suara (maksimal ±10 detik).
+        Setelah selesai, simpan dan kirim hasilnya sebagai file `.wav`.
+        """
+    )
+    # Versi simple pakai elemen audio HTML
+    audio_bytes = st.audio_input("🎙️ Rekam suara kamu di sini")
+    if audio_bytes:
+        temp_path = "recorded_audio.wav"
+        with open(temp_path, "wb") as f:
+            f.write(audio_bytes.read())
+        audio_data = temp_path
+        st.success("✅ Suara berhasil direkam.")
+        st.audio(temp_path, format="audio/wav")
 
 # ============================================================
-# Prediksi & Visualisasi
+# Proses Prediksi
 # ============================================================
-if audio_bytes:
-    temp_path = "temp_audio.wav"
-    with open(temp_path, "wb") as f:
-        f.write(audio_bytes)
-
+if audio_data:
     with st.spinner("⏳ Menganalisis audio..."):
         speaker, status, prob, probs, labels, y, sr, err = predict_speaker(
-            temp_path, threshold=threshold, lock_speakers=lock_speakers
+            audio_data, threshold=threshold, lock_speakers=lock_speakers
         )
 
     if err:
@@ -144,36 +158,27 @@ if audio_bytes:
     else:
         st.markdown("---")
         st.subheader("🎯 Hasil Prediksi")
-
-        # Warna confidence
-        if prob < 0.5:
-            color = "🔴"
-        elif prob < 0.7:
-            color = "🟡"
-        else:
-            color = "🟢"
-
         col1, col2 = st.columns(2)
         col1.metric("Speaker", speaker)
         col2.metric("Status", status)
-        st.metric("Confidence", f"{prob*100:.2f}% {color}")
+        st.metric("Confidence", f"{prob*100:.2f}%")
 
-        # Tabel Probabilitas
+        # 📊 Probabilitas
         prob_df = pd.DataFrame({
             "Kelas": labels,
             "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
         }).sort_values("Probabilitas (%)", ascending=False)
-        st.markdown("#### 📊 Probabilitas Tiap Kelas")
-        st.dataframe(prob_df, use_container_width=True)
 
-        # Waveform
+        st.markdown("#### 📊 Probabilitas Tiap Kelas")
+        st.table(prob_df)
+
+        # 🎵 Visualisasi Audio
         st.subheader("📈 Waveform Audio")
         fig, ax = plt.subplots(figsize=(8, 3))
         librosa.display.waveshow(y, sr=sr, ax=ax)
         ax.set_title("Waveform Audio")
         st.pyplot(fig)
 
-        # Spectrogram
         st.subheader("🎛️ Mel Spectrogram")
         S = librosa.feature.melspectrogram(y=y, sr=sr)
         S_dB = librosa.power_to_db(S, ref=np.max)
@@ -183,7 +188,7 @@ if audio_bytes:
         ax.set_title("Mel Spectrogram")
         st.pyplot(fig)
 
-        # Probabilitas Barplot
+        # 📉 Barplot
         st.subheader("📉 Distribusi Probabilitas")
         plt.figure(figsize=(6, 4))
         sns.barplot(x="Kelas", y="Probabilitas (%)", data=prob_df)
@@ -191,13 +196,8 @@ if audio_bytes:
         plt.ylim(0, 100)
         st.pyplot(plt)
 
-        # Analisis threshold otomatis
-        st.subheader("📈 Analisis Pengaruh Threshold")
-        th_values = np.arange(0.3, 0.95, 0.05)
-        decisions = ["Dikenal" if prob >= t else "Tidak dikenal" for t in th_values]
-        df_thresh = pd.DataFrame({"Threshold": th_values, "Status": decisions})
-        st.line_chart(df_thresh.set_index("Threshold"))
-
-    os.remove(temp_path)
+    # Hapus file sementara
+    if os.path.exists(audio_data):
+        os.remove(audio_data)
 else:
-    st.info("🎧 Silakan upload atau rekam audio terlebih dahulu.")
+    st.info("📂 Silakan upload atau rekam suara terlebih dahulu untuk memulai prediksi.")
