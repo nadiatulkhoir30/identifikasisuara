@@ -13,3 +13,6 @@ av
 pydub
 ffmpeg-python
 sounddevice
+streamlit-webrtc==0.49.0
+av
+ffmpeg-python
