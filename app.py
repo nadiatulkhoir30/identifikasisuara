@@ -99,7 +99,13 @@ def predict_audio(file_path, threshold=0.6):
 # UI Streamlit
 # ============================================================
 st.title("🎧 Prediksi Suara Buka/Tutup")
-st.markdown("Hanya menerima input dari **Nadia** dan **Vanisa**. Speaker lain otomatis akan jadi 'Unknown'.")
+st.markdown(
+    """
+    <p style="font-size:16px;">Aplikasi ini hanya menerima suara dari <b>Nadia</b> dan <b>Vanisa</b>.<br>
+    Jika suara lain terdeteksi, hasil akan menjadi <b>Unknown</b>.</p>
+    """,
+    unsafe_allow_html=True,
+)
 
 uploaded_file = st.file_uploader("🎵 Upload file audio (.wav)", type=["wav"])
 
@@ -116,25 +122,39 @@ if uploaded_file is not None:
     # Hasil Prediksi
     st.markdown("---")
     st.subheader("🎯 Hasil Prediksi")
+
+    # Tata letak hasil prediksi rapi
     col1, col2 = st.columns(2)
-    col1.metric("Speaker", speaker)
-    col2.metric("Status Suara", status)
+    with col1:
+        st.metric("Speaker", speaker)
+    with col2:
+        st.metric("Status Suara", status)
+
     st.metric("Confidence (%)", f"{prob*100:.2f}%")
 
-    # Tabel Probabilitas
+    # =============================
+    # Tabel Probabilitas — statis (tidak gerak)
+    # =============================
     prob_df = pd.DataFrame({
         "Kelas": labels,
         "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
     }).sort_values("Probabilitas (%)", ascending=False)
 
     st.markdown("#### 📊 Probabilitas Tiap Kelas")
-    st.dataframe(prob_df, use_container_width=True)
+    st.table(
+        prob_df.style.set_table_styles([
+            {"selector": "th", "props": [("text-align", "center"), ("font-weight", "bold")]},
+            {"selector": "td", "props": [("text-align", "center")]}
+        ])
+    )
 
+    # =============================
     # Visualisasi Audio
+    # =============================
     st.subheader("📈 Waveform Audio")
     fig, ax = plt.subplots(figsize=(8, 3))
     librosa.display.waveshow(y, sr=sr, ax=ax)
-    ax.set_title("Waveform")
+    ax.set_title("Waveform Audio", fontsize=12)
     st.pyplot(fig)
 
     st.subheader("🎛️ Mel Spectrogram")
@@ -143,17 +163,21 @@ if uploaded_file is not None:
     fig, ax = plt.subplots(figsize=(10, 4))
     img = librosa.display.specshow(S_dB, sr=sr, x_axis='time', y_axis='mel', ax=ax)
     fig.colorbar(img, ax=ax, format='%+2.0f dB')
-    ax.set_title("Mel Spectrogram")
+    ax.set_title("Mel Spectrogram", fontsize=12)
     st.pyplot(fig)
 
-    # Probabilitas Barplot
+    # =============================
+    # Distribusi Probabilitas
+    # =============================
     st.subheader("📉 Distribusi Probabilitas")
     plt.figure(figsize=(6, 4))
     sns.barplot(x="Kelas", y="Probabilitas (%)", data=prob_df)
     plt.xticks(rotation=45)
     plt.ylim(0, 100)
+    plt.tight_layout()
     st.pyplot(plt)
 
+    # Hapus file sementara
     os.remove(temp_path)
 else:
     st.info("📂 Silakan upload file audio terlebih dahulu.")
