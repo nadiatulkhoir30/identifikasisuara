@@ -11,13 +11,9 @@ import joblib
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
-import tempfile
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
-import av
-import threading
-import time
 
 # ============================================================
+# Konfigurasi halaman
 st.set_page_config(
     page_title="🎤 Prediksi Suara (Nadia & Vanisa Only)",
     page_icon="🎵",
@@ -69,7 +65,7 @@ def extract_features(file_path):
     return np.array(features).reshape(1, -1), y, sr
 
 # ============================================================
-# Prediksi (Locked Speaker: Nadia & Vanisa)
+# Prediksi
 def predict_audio(file_path, threshold=0.6):
     features, y, sr = extract_features(file_path)
     features_scaled = scaler.transform(features)
@@ -84,7 +80,7 @@ def predict_audio(file_path, threshold=0.6):
     speaker = parts[0] if len(parts) > 0 else "Unknown"
     status = parts[1].capitalize() if len(parts) > 1 else "-"
 
-    # ❌ Filter: hanya Nadia & Vanisa
+    # Hanya Nadia & Vanisa
     allowed = ["nadia", "vanisa"]
     if speaker not in allowed or pred_prob < threshold:
         speaker = "Unknown"
@@ -93,24 +89,7 @@ def predict_audio(file_path, threshold=0.6):
     return speaker.capitalize(), status, pred_prob, probs, labels, y, sr
 
 # ============================================================
-# AudioProcessor untuk WebRTC
-class AudioProcessor(AudioProcessorBase):
-    def __init__(self):
-        self.audio_file = None
-        self.last_frame_time = time.time()
-        self.lock = threading.Lock()
-
-    def recv_audio(self, frame: av.AudioFrame) -> av.AudioFrame:
-        audio_array = frame.to_ndarray()
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        librosa.output.write_wav(tmp_file.name, audio_array.astype(np.float32), sr=22050)
-        with self.lock:
-            self.audio_file = tmp_file.name
-            self.last_frame_time = time.time()
-        return frame
-
-# ============================================================
-# UI Streamlit
+# UI
 st.title("🎧 Prediksi Suara Buka/Tutup (Nadia & Vanisa Only)")
 st.markdown("""
 Aplikasi ini hanya menerima suara dari <b>Nadia</b> dan <b>Vanisa</b>.
@@ -126,42 +105,15 @@ threshold = st.sidebar.slider(
     step=0.05
 )
 
-# Pilih metode input
-input_mode = st.radio("Pilih metode input audio:", ("Upload File", "Rekam Suara"))
+# Upload file
+uploaded_file = st.file_uploader("🎵 Upload file audio (.wav)", type=["wav"])
+if uploaded_file is not None:
+    temp_path = "temp_audio.wav"
+    with open(temp_path, "wb") as f:
+        f.write(uploaded_file.read())
 
-temp_path = None
-
-# Upload File
-if input_mode == "Upload File":
-    uploaded_file = st.file_uploader("🎵 Upload file audio (.wav)", type=["wav"])
-    if uploaded_file:
-        temp_path = "temp_audio.wav"
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_file.read())
-
-# Rekam Suara via Browser
-else:
-    st.info("🎤 Klik START untuk rekam. Prediksi otomatis setelah selesai.")
-    webrtc_ctx = webrtc_streamer(
-        key="audio",
-        mode=WebRtcMode.SENDONLY,
-        audio_processor_factory=AudioProcessor,
-        media_stream_constraints={"audio": True, "video": False},
-        async_processing=True,
-    )
-    if webrtc_ctx.audio_processor:
-        st.info("⏳ Tunggu beberapa detik setelah selesai bicara, prediksi akan otomatis muncul...")
-        while True:
-            time.sleep(1)
-            with webrtc_ctx.audio_processor.lock:
-                if webrtc_ctx.audio_processor.audio_file:
-                    if time.time() - webrtc_ctx.audio_processor.last_frame_time > 2:
-                        temp_path = webrtc_ctx.audio_processor.audio_file
-                        break
-
-# Prediksi jika file tersedia
-if temp_path and os.path.exists(temp_path):
     st.audio(temp_path, format="audio/wav")
+
     with st.spinner("⏳ Memproses audio..."):
         speaker, status, prob, probs, labels, y, sr = predict_audio(temp_path, threshold)
 
@@ -171,7 +123,7 @@ if temp_path and os.path.exists(temp_path):
     col2.metric("Status Suara", status)
     st.metric("Confidence (%)", f"{prob*100:.2f}%")
 
-    # Tabel probabilitas
+    # Probabilitas
     prob_df = pd.DataFrame({
         "Kelas": labels,
         "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
@@ -179,13 +131,13 @@ if temp_path and os.path.exists(temp_path):
     st.markdown("#### 📊 Probabilitas Tiap Kelas")
     st.table(prob_df)
 
-    # Visualisasi Waveform
+    # Waveform
     st.subheader("📈 Waveform Audio")
     fig, ax = plt.subplots(figsize=(8, 3))
     librosa.display.waveshow(y, sr=sr, ax=ax)
     st.pyplot(fig)
 
-    # Visualisasi Mel Spectrogram
+    # Mel Spectrogram
     st.subheader("🎛️ Mel Spectrogram")
     S = librosa.feature.melspectrogram(y=y, sr=sr)
     S_dB = librosa.power_to_db(S, ref=np.max)
@@ -194,7 +146,7 @@ if temp_path and os.path.exists(temp_path):
     fig.colorbar(ax=ax, format='%+2.0f dB')
     st.pyplot(fig)
 
-    # Distribusi Probabilitas
+    # Distribusi probabilitas
     st.subheader("📉 Distribusi Probabilitas")
     plt.figure(figsize=(6, 4))
     sns.barplot(x="Kelas", y="Probabilitas (%)", data=prob_df)
@@ -205,4 +157,4 @@ if temp_path and os.path.exists(temp_path):
 
     os.remove(temp_path)
 else:
-    st.info("📂 Silakan upload atau rekam audio terlebih dahulu.")
+    st.info("📂 Silakan upload file audio terlebih dahulu.")
