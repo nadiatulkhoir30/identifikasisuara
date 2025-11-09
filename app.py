@@ -12,19 +12,16 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 import tempfile
-import threading
-import time
-from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode
-import av
 
 # ============================================================
 st.set_page_config(
     page_title="🎤 Prediksi Suara (Nadia & Vanisa Only)",
     page_icon="🎵",
-    layout="wide"
+    layout="centered"
 )
 
 # ============================================================
+# Load model & scaler
 @st.cache_resource
 def load_model_scaler():
     model = joblib.load("best_audio_model.pkl")
@@ -93,23 +90,6 @@ def predict_audio(file_path, threshold=0.6):
     return speaker.capitalize(), status, pred_prob, probs, labels, y, sr
 
 # ============================================================
-# AudioProcessor untuk WebRTC
-class AudioProcessor(AudioProcessorBase):
-    def __init__(self):
-        self.audio_file = None
-        self.last_frame_time = time.time()
-        self.lock = threading.Lock()
-
-    def recv_audio(self, frame: av.AudioFrame) -> av.AudioFrame:
-        audio_array = frame.to_ndarray()
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        librosa.output.write_wav(tmp_file.name, audio_array.astype(np.float32), sr=22050)
-        with self.lock:
-            self.audio_file = tmp_file.name
-            self.last_frame_time = time.time()
-        return frame
-
-# ============================================================
 # UI Streamlit
 st.title("🎧 Prediksi Suara Buka/Tutup (Nadia & Vanisa Only)")
 st.markdown("""
@@ -126,42 +106,16 @@ threshold = st.sidebar.slider(
     step=0.05
 )
 
-# Pilih metode input
-input_mode = st.radio("Pilih metode input audio:", ("Upload File", "Rekam Suara"))
+# Upload File Audio
+uploaded_file = st.file_uploader("🎵 Upload file audio (.wav)", type=["wav"])
 
-temp_path = None
+if uploaded_file is not None:
+    temp_path = "temp_audio.wav"
+    with open(temp_path, "wb") as f:
+        f.write(uploaded_file.read())
 
-# Upload File
-if input_mode == "Upload File":
-    uploaded_file = st.file_uploader("🎵 Upload file audio (.wav)", type=["wav"])
-    if uploaded_file:
-        temp_path = "temp_audio.wav"
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_file.read())
-
-# Rekam Suara via Browser
-else:
-    st.info("🎤 Klik START untuk rekam. Prediksi otomatis setelah selesai.")
-    webrtc_ctx = webrtc_streamer(
-        key="audio",
-        mode=WebRtcMode.SENDONLY,
-        audio_processor_factory=AudioProcessor,
-        media_stream_constraints={"audio": True, "video": False},
-        async_processing=True,
-    )
-    if webrtc_ctx.audio_processor:
-        st.info("⏳ Tunggu beberapa detik setelah selesai bicara, prediksi akan otomatis muncul...")
-        while True:
-            time.sleep(1)
-            with webrtc_ctx.audio_processor.lock:
-                if webrtc_ctx.audio_processor.audio_file:
-                    if time.time() - webrtc_ctx.audio_processor.last_frame_time > 2:
-                        temp_path = webrtc_ctx.audio_processor.audio_file
-                        break
-
-# Prediksi jika file tersedia
-if temp_path and os.path.exists(temp_path):
     st.audio(temp_path, format="audio/wav")
+
     with st.spinner("⏳ Memproses audio..."):
         speaker, status, prob, probs, labels, y, sr = predict_audio(temp_path, threshold)
 
@@ -205,4 +159,4 @@ if temp_path and os.path.exists(temp_path):
 
     os.remove(temp_path)
 else:
-    st.info("📂 Silakan upload atau rekam audio terlebih dahulu.")
+    st.info("📂 Silakan upload file audio terlebih dahulu.")
