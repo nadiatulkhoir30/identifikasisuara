@@ -1,74 +1,137 @@
-import librosa
+# ==================================================
+# 🎵 APLIKASI PREDIKSI SPEAKER MENGGUNAKAN STREAMLIT
+# ==================================================
+import streamlit as st
 import numpy as np
 import pandas as pd
+import librosa
 import joblib
+import os
+import matplotlib.pyplot as plt
+import librosa.display
 
-# -------------------------------
-# Load model dan scaler
-# -------------------------------
-best_model = joblib.load("best_audio_model.pkl")
-scaler = joblib.load("scaler_audio.pkl")
+# ==================================================
+# 🔹 LOAD MODEL & SCALER
+# ==================================================
+@st.cache_resource
+def load_model_scaler():
+    model = joblib.load("best_audio_model.pkl")
+    scaler = joblib.load("scaler_audio.pkl")
+    return model, scaler
 
-# -------------------------------
-# Daftar orang yang diizinkan
-# -------------------------------
-allowed_people = ["Nadia", "Vanisa"]  # hanya orang ini
-confidence_threshold = 0.6  # threshold minimal confidence
+model, scaler = load_model_scaler()
 
-# -------------------------------
-# Fungsi ekstraksi fitur
-# -------------------------------
-def extract_features(file_path, sr=22050, n_mfcc=13):
-    y, sr = librosa.load(file_path, sr=sr)
-    y, _ = librosa.effects.trim(y)
-    y = librosa.util.normalize(y)
+# ==================================================
+# 🔹 FUNGSI EKSTRAKSI FITUR AUDIO
+# ==================================================
+def zero_crossing_rate(y):
+    return np.mean(librosa.feature.zero_crossing_rate(y=y).T, axis=0)[0]
+
+def rms(signal):
+    return np.sqrt(np.mean(signal**2))
+
+def spectral_centroid(y, sr):
+    return np.mean(librosa.feature.spectral_centroid(y=y, sr=sr))
+
+def spectral_bandwidth(y, sr):
+    return np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr))
+
+def spectral_contrast(y, sr):
+    return np.mean(librosa.feature.spectral_contrast(y=y, sr=sr))
+
+def mfcc_features(y, sr, n_mfcc=13):
+    mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc)
+    return np.mean(mfccs, axis=1)
+
+def extract_features(file_path):
+    """Ekstraksi fitur dari file audio"""
+    y, sr = librosa.load(file_path, sr=22050)
+    features = [
+        zero_crossing_rate(y),
+        rms(y),
+        spectral_centroid(y, sr),
+        spectral_bandwidth(y, sr),
+        spectral_contrast(y, sr)
+    ]
+    mfccs = mfcc_features(y, sr)
+    features.extend(mfccs.tolist())
+    return np.array(features).reshape(1, -1), y, sr
+
+# ==================================================
+# 🔹 FUNGSI PREDIKSI SPEAKER
+# ==================================================
+def predict_speaker(file_path, threshold=0.7):
+    features, y, sr = extract_features(file_path)
     
-    zcr = np.mean(librosa.feature.zero_crossing_rate(y).T, axis=0)[0]
-    rms = np.sqrt(np.mean(y**2))
-    spectral_centroid = np.mean(librosa.feature.spectral_centroid(y=y, sr=sr))
-    spectral_bandwidth = np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr))
-    spectral_contrast = np.mean(librosa.feature.spectral_contrast(y=y, sr=sr))
-    mfccs = np.mean(librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc), axis=1)
-    
-    features = [zcr, rms, spectral_centroid, spectral_bandwidth, spectral_contrast] + mfccs.tolist()
-    return np.array(features).reshape(1, -1)
+    if features.shape[1] != scaler.n_features_in_:
+        return None, None, None, f"❌ Jumlah fitur {features.shape[1]} tidak cocok dengan scaler ({scaler.n_features_in_})"
 
-# -------------------------------
-# Fungsi prediksi dengan filter
-# -------------------------------
-def predict_audio(file_path):
-    features = extract_features(file_path)
     features_scaled = scaler.transform(features)
-    
-    pred_label = best_model.predict(features_scaled)[0]
-    pred_prob = best_model.predict_proba(features_scaled).max() if hasattr(best_model, "predict_proba") else np.nan
-    
-    # Ambil nama orang dari label (misal "Nadia_buka")
-    person_name = pred_label.split("_")[0]
-    
-    # Filter: hanya allowed_people dan confidence > threshold
-    if person_name not in allowed_people or pred_prob < confidence_threshold:
-        pred_label = "Tidak dikenal"
-    
-    return {"file": file_path, "pred_label": pred_label, "confidence": pred_prob}
+    probs = model.predict_proba(features_scaled)[0]
+    max_prob = np.max(probs)
+    pred_label = model.classes_[np.argmax(probs)]
 
-# -------------------------------
-# Contoh file audio
-# -------------------------------
-audio_files = [
-    "clean_audio/Nadia/buka/buka 1.wav",
-    "clean_audio/Nadia/tutup/tutup1.wav",
-    "clean_audio/ulva_tutup.wav"  # contoh orang lain
-]
+    if max_prob < threshold:
+        result = "❌ Speaker tidak dikenal"
+    else:
+        result = f"✅ Prediksi Speaker: {pred_label}"
 
-# -------------------------------
-# Prediksi semua file
-# -------------------------------
-results = [predict_audio(f) for f in audio_files]
-df_results = pd.DataFrame(results)
-print("✅ Hasil Prediksi Audio Baru:")
-print(df_results)
+    return result, max_prob, (y, sr), None
 
-# Simpan ke CSV
-df_results.to_csv("prediksi_audio_filtered.csv", index=False)
-print("✅ Hasil prediksi disimpan ke 'prediksi_audio_filtered.csv'")
+# ==================================================
+# 🌟 TAMPILAN STREAMLIT
+# ==================================================
+st.set_page_config(page_title="Prediksi Speaker Audio", page_icon="🎧", layout="wide")
+
+st.title("🎙️ Aplikasi Prediksi Speaker Berdasarkan Suara")
+st.markdown("Unggah file audio (.wav, .mp3, .m4a) untuk mengetahui siapa pembicaranya berdasarkan model yang sudah dilatih.")
+
+uploaded_file = st.file_uploader("📂 Unggah File Audio", type=["wav", "mp3", "m4a"])
+
+threshold = st.slider("🔽 Atur Threshold Kepercayaan", 0.0, 1.0, 0.7, 0.01)
+
+if uploaded_file is not None:
+    # Simpan file sementara
+    temp_path = "temp_audio.wav"
+    with open(temp_path, "wb") as f:
+        f.write(uploaded_file.read())
+
+    st.audio(temp_path, format="audio/wav")
+    
+    with st.spinner("⏳ Memproses audio dan mengekstrak fitur..."):
+        result, confidence, (y, sr), error = predict_speaker(temp_path, threshold)
+
+    if error:
+        st.error(error)
+    else:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("📊 Hasil Prediksi")
+            st.success(result)
+            st.write(f"**Confidence:** {confidence:.2f}")
+            if confidence < threshold:
+                st.warning("Confidence di bawah threshold — kemungkinan suara baru atau tidak dikenal.")
+        
+        with col2:
+            st.subheader("🎵 Visualisasi Audio")
+            fig, ax = plt.subplots(figsize=(8, 3))
+            librosa.display.waveshow(y, sr=sr, ax=ax, color="purple")
+            ax.set(title="Gelombang Suara")
+            st.pyplot(fig)
+
+        # Ekstraksi fitur detail
+        features, _, _ = extract_features(temp_path)
+        feature_names = [
+            "Zero Crossing Rate", "RMS", "Spectral Centroid",
+            "Spectral Bandwidth", "Spectral Contrast"
+        ] + [f"MFCC-{i+1}" for i in range(13)]
+
+        df_features = pd.DataFrame(features, columns=feature_names)
+        st.subheader("🔍 Detail Fitur Audio")
+        st.dataframe(df_features.T.rename(columns={0: "Nilai"}), use_container_width=True)
+
+    # Hapus file sementara
+    os.remove(temp_path)
+else:
+    st.info("📁 Silakan unggah file audio terlebih dahulu untuk melakukan prediksi.")
