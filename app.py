@@ -1,5 +1,5 @@
 # =========================================
-# APP STREAMLIT: Prediksi Suara Buka/Tutup + Speaker (Final & Akurat)
+# 🎧 APP STREAMLIT: Prediksi Suara Buka/Tutup + Speaker (Final Version)
 # =========================================
 
 import streamlit as st
@@ -74,7 +74,7 @@ def extract_features_streamlit(file_path):
     return np.array(features).reshape(1, -1), y, sr
 
 # =========================================
-# Fungsi Prediksi
+# 🔹 Fungsi Prediksi (Versi Final)
 # =========================================
 def predict_audio(file_path, threshold=0.7):
     features, y, sr = extract_features_streamlit(file_path)
@@ -92,19 +92,22 @@ def predict_audio(file_path, threshold=0.7):
     max_prob = np.max(probs)
     pred_label = model.classes_[np.argmax(probs)]
 
-    # Threshold handling
-    if max_prob < threshold:
+    # Pisah nama dan status (contoh: nadia_buka → nadia, buka)
+    if "_" in pred_label:
+        speaker_name, status = pred_label.split("_")
+    else:
+        speaker_name, status = pred_label, "-"
+
+    # Daftar speaker yang dikenal
+    known_speakers = ["nadia", "vanisa"]
+
+    # Logika Unknown
+    if speaker_name.lower() not in known_speakers or max_prob < threshold:
         speaker = "Unknown"
         status = "Tidak diketahui"
     else:
-        # Jika label memiliki format speaker_status
-        if "_" in pred_label:
-            parts = pred_label.split("_")
-            speaker = parts[0].capitalize()
-            status = parts[1].capitalize()
-        else:
-            speaker = pred_label.capitalize()
-            status = "-"
+        speaker = speaker_name.capitalize()
+        status = status.capitalize()
 
     return speaker, status, max_prob, probs, features_scaled, y, sr
 
@@ -207,7 +210,8 @@ if uploaded_file is not None:
             """
             <div style="text-align:center; color:gray; font-size:13px;">
             Model menggunakan fitur audio (ZCR, RMS, Spectral, MFCC).<br>
-            Threshold digunakan untuk mendeteksi suara asing (Unknown).
+            Threshold digunakan untuk mendeteksi suara asing (Unknown).<br>
+            Unknown hanya muncul jika bukan suara Nadia atau Vanisa.
             </div>
             """,
             unsafe_allow_html=True
