@@ -1,165 +1,159 @@
-# =========================================
-# APP STREAMLIT: Prediksi Suara Buka / Tutup (Versi Stabil)
-# =========================================
+# ============================================================
+# 🎧 STREAMLIT APP — Prediksi Suara Buka/Tutup (Locked to Nadia & Vanisa)
+# ============================================================
 
 import streamlit as st
 import numpy as np
 import pandas as pd
 import librosa
+import librosa.display
 import joblib
 import os
 import matplotlib.pyplot as plt
+import seaborn as sns
 
-# ===============================
-# Konfigurasi Tampilan Streamlit
-# ===============================
+# ============================================================
+# Konfigurasi Streamlit
+# ============================================================
 st.set_page_config(
-    page_title="Prediksi Suara Buka/Tutup",
+    page_title="Prediksi Suara Buka/Tutup (Nadia & Vanisa Only)",
     page_icon="🎵",
     layout="centered",
-    initial_sidebar_state="collapsed"
 )
 
-# ===============================
-# Load model dan scaler
-# ===============================
+# ============================================================
+# Load model & scaler
+# ============================================================
 @st.cache_resource
 def load_model_scaler():
-    try:
-        model = joblib.load("rf_model.pkl")
-        scaler = joblib.load("scaler.pkl")
-        return model, scaler
-    except Exception as e:
-        st.error(f"❌ Gagal memuat model atau scaler: {e}")
-        st.stop()
+    model = joblib.load("best_audio_model.pkl")
+    scaler = joblib.load("scaler_audio.pkl")
+    return model, scaler
 
 model, scaler = load_model_scaler()
 
-# ===============================
-# Fungsi Ekstraksi Fitur
-# ===============================
+# ============================================================
+# Fungsi ekstraksi fitur
+# ============================================================
+def zero_crossing_rate(y):
+    return np.mean(librosa.feature.zero_crossing_rate(y=y).T, axis=0)[0]
+
+def rms(signal):
+    return np.sqrt(np.mean(signal**2))
+
+def spectral_centroid(y, sr):
+    return np.mean(librosa.feature.spectral_centroid(y=y, sr=sr))
+
+def spectral_bandwidth(y, sr):
+    return np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr))
+
+def spectral_contrast(y, sr):
+    return np.mean(librosa.feature.spectral_contrast(y=y, sr=sr))
+
+def mfcc_features(y, sr, n_mfcc=13):
+    mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc)
+    return np.mean(mfccs, axis=1)
+
 def extract_features(file_path):
     y, sr = librosa.load(file_path, sr=22050)
-    y = librosa.util.normalize(y)
+    features = [
+        zero_crossing_rate(y),
+        rms(y),
+        spectral_centroid(y, sr),
+        spectral_bandwidth(y, sr),
+        spectral_contrast(y, sr),
+    ]
+    mfccs = mfcc_features(y, sr)
+    features.extend(mfccs.tolist())
+    return np.array(features).reshape(1, -1), y, sr
 
-    # Samakan durasi audio
-    target_length = 2 * sr
-    if len(y) < target_length:
-        y = np.pad(y, (0, target_length - len(y)), mode='constant')
-    else:
-        y = y[:target_length]
+# ============================================================
+# Prediksi (Locked Speaker: Nadia & Vanisa)
+# ============================================================
+def predict_audio(file_path, threshold=0.6):
+    features, y, sr = extract_features(file_path)
+    features_scaled = scaler.transform(features)
 
-    duration = librosa.get_duration(y=y, sr=sr)
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-    chroma = librosa.feature.chroma_stft(y=y, sr=sr)
-    zcr = np.mean(librosa.feature.zero_crossing_rate(y))
-    rms = np.mean(librosa.feature.rms(y=y))
+    probs = model.predict_proba(features_scaled)[0]
+    labels = model.classes_
 
-    features = {
-        "duration_sec": duration,
-        "chroma_mean": np.mean(chroma),
-        "zero_crossing_rate": zcr,
-        "rms": rms
-    }
-    for i in [4, 8, 9, 10, 11, 13]:
-        if i <= mfcc.shape[0]:
-            features[f"mfcc_{i}"] = np.mean(mfcc[i - 1])
+    # Temukan prediksi tertinggi
+    idx_top = np.argmax(probs)
+    pred_label = labels[idx_top]
+    pred_prob = probs[idx_top]
 
-    return features, y, sr
+    # Pisahkan speaker & status
+    parts = pred_label.lower().split("_")
+    speaker = parts[0] if len(parts) > 0 else "unknown"
+    status = parts[1].capitalize() if len(parts) > 1 else "-"
 
-# ===============================
-# Header aplikasi (UI modern)
-# ===============================
-st.markdown(
-    """
-    <div style="text-align:center">
-        <h1>🎧 Prediksi Suara <span style="color:#1E90FF;">Buka</span> / <span style="color:#FF6347;">Tutup</span></h1>
-        <p style="font-size:17px;">Upload file audio kamu (.wav) untuk mendeteksi apakah suaranya <b>Buka</b> atau <b>Tutup</b>.</p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+    # ✅ Hanya izinkan Nadia & Vanisa
+    allowed = ["nadia", "vanisa"]
+    if speaker not in allowed or pred_prob < threshold:
+        speaker = "Unknown"
+        status = "Tidak diketahui"
 
-# ===============================
-# Upload audio
-# ===============================
-uploaded_file = st.file_uploader("🎵 Pilih file audio (.wav)", type=["wav"])
+    return speaker.capitalize(), status, pred_prob, probs, labels, y, sr
+
+# ============================================================
+# UI Streamlit
+# ============================================================
+st.title("🎧 Prediksi Suara Buka/Tutup")
+st.markdown("Hanya menerima input dari **Nadia** dan **Vanisa**. Speaker lain otomatis akan jadi 'Unknown'.")
+
+uploaded_file = st.file_uploader("🎵 Upload file audio (.wav)", type=["wav"])
 
 if uploaded_file is not None:
     temp_path = "temp_audio.wav"
-    try:
-        # Simpan file temporer
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_file.read())
+    with open(temp_path, "wb") as f:
+        f.write(uploaded_file.read())
 
-        st.audio(uploaded_file, format="audio/wav")
-        st.info("🎶 File audio berhasil diunggah. Sedang diproses...")
+    st.audio(temp_path, format="audio/wav")
 
-        # Ekstrak fitur
-        with st.spinner("🔍 Mengekstrak fitur dari audio..."):
-            features, y, sr = extract_features(temp_path)
-            features_df = pd.DataFrame([features])
-            features_scaled = scaler.transform(features_df)
+    with st.spinner("⏳ Memproses audio..."):
+        speaker, status, prob, probs, labels, y, sr = predict_audio(temp_path)
 
-        # Prediksi
-        prediction = model.predict(features_scaled)[0]
-        probabilities = model.predict_proba(features_scaled)[0]
+    # Hasil Prediksi
+    st.markdown("---")
+    st.subheader("🎯 Hasil Prediksi")
+    col1, col2 = st.columns(2)
+    col1.metric("Speaker", speaker)
+    col2.metric("Status Suara", status)
+    st.metric("Confidence (%)", f"{prob*100:.2f}%")
 
-        # ===============================
-        # Tampilan hasil prediksi (UI cantik)
-        # ===============================
-        st.markdown("---")
-        st.subheader("🎯 Hasil Prediksi")
+    # Tabel Probabilitas
+    prob_df = pd.DataFrame({
+        "Kelas": labels,
+        "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
+    }).sort_values("Probabilitas (%)", ascending=False)
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric(label="Prediksi", value=f"{prediction.upper()}")
-        with col2:
-            st.metric(label="Kepercayaan Model (%)", value=f"{max(probabilities)*100:.2f}%")
+    st.markdown("#### 📊 Probabilitas Tiap Kelas")
+    st.dataframe(prob_df, use_container_width=True)
 
-        if prediction.lower() == "buka":
-            st.success("✅ Suara ini terdeteksi sebagai **BUKA** 🔊")
-        else:
-            st.error("🔒 Suara ini terdeteksi sebagai **TUTUP** 🤫")
+    # Visualisasi Audio
+    st.subheader("📈 Waveform Audio")
+    fig, ax = plt.subplots(figsize=(8, 3))
+    librosa.display.waveshow(y, sr=sr, ax=ax)
+    ax.set_title("Waveform")
+    st.pyplot(fig)
 
-        # Probabilitas tiap kelas
-        prob_df = pd.DataFrame({
-            "Kelas": model.classes_,
-            "Probabilitas (%)": [round(float(p)*100, 2) for p in probabilities]
-        })
-        st.markdown("#### 🔍 Probabilitas Tiap Kelas:")
-        st.dataframe(prob_df, use_container_width=True)
+    st.subheader("🎛️ Mel Spectrogram")
+    S = librosa.feature.melspectrogram(y=y, sr=sr)
+    S_dB = librosa.power_to_db(S, ref=np.max)
+    fig, ax = plt.subplots(figsize=(10, 4))
+    img = librosa.display.specshow(S_dB, sr=sr, x_axis='time', y_axis='mel', ax=ax)
+    fig.colorbar(img, ax=ax, format='%+2.0f dB')
+    ax.set_title("Mel Spectrogram")
+    st.pyplot(fig)
 
-        # Waveform audio (manual)
-        fig, ax = plt.subplots(figsize=(8, 2.5))
-        ax.plot(np.arange(len(y)) / sr, y, color='dodgerblue')
-        ax.set_title("Waveform Audio")
-        ax.set_xlabel("Waktu (detik)")
-        ax.set_ylabel("Amplitudo")
-        st.pyplot(fig)
+    # Probabilitas Barplot
+    st.subheader("📉 Distribusi Probabilitas")
+    plt.figure(figsize=(6, 4))
+    sns.barplot(x="Kelas", y="Probabilitas (%)", data=prob_df)
+    plt.xticks(rotation=45)
+    plt.ylim(0, 100)
+    st.pyplot(plt)
 
-        # Debug info
-        with st.expander("🧠 Debug Info (cek fitur dan nilai):"):
-            st.write("Fitur sebelum normalisasi:")
-            st.dataframe(features_df)
-            st.write("Fitur setelah normalisasi:")
-            st.dataframe(pd.DataFrame(features_scaled, columns=features_df.columns))
-            st.write("Probabilitas mentah:", probabilities)
-
-        # Catatan footer
-        st.markdown(
-            """
-            <div style="text-align:center; color:gray; font-size:13px;">
-            Model menggunakan fitur audio (MFCC, RMS, ZCR, Chroma).<br>
-            Pastikan file audio mirip dengan data training untuk hasil akurat.
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-    finally:
-        # Hapus file sementara
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+    os.remove(temp_path)
 else:
-    st.warning("📂 Silakan upload file audio terlebih dahulu untuk melakukan prediksi.")
+    st.info("📂 Silakan upload file audio terlebih dahulu.")
