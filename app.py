@@ -11,6 +11,8 @@ import joblib
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
+from io import BytesIO
+from streamlit_mic_recorder import mic_recorder
 
 # ============================================================
 # Konfigurasi Streamlit
@@ -22,10 +24,10 @@ st.set_page_config(
 )
 
 st.title("🎧 Prediksi Suara Buka/Tutup")
-st.markdown(
-    "Aplikasi ini memprediksi siapa yang berbicara dan apakah suaranya **Buka** atau **Tutup**. "
-    "Kamu bisa mengatur ambang batas (threshold) dan mengunci hanya untuk Nadia & Vanisa."
-)
+st.markdown("""
+Aplikasi ini memprediksi **siapa yang berbicara (Nadia/Vanisa)** dan status suaranya (**Buka/Tutup**).  
+Kamu bisa **atur threshold** dan juga **rekam langsung dari microphone** 🎙️
+""")
 
 # ============================================================
 # Load Model & Scaler
@@ -92,7 +94,6 @@ def predict_speaker(file_path, threshold=0.7, lock_speakers=True):
 
     allowed = ["nadia", "vanisa"]
 
-    # Logika kunci speaker dan threshold
     if (lock_speakers and speaker_name not in allowed) or (max_prob < threshold):
         speaker_name = "Unknown"
         status = "Tidak diketahui"
@@ -102,21 +103,36 @@ def predict_speaker(file_path, threshold=0.7, lock_speakers=True):
     return speaker_name.capitalize(), status, max_prob, probs, labels, y, sr, None
 
 # ============================================================
-# UI Streamlit
+# UI — Upload / Rekam Audio
 # ============================================================
-
-uploaded_file = st.file_uploader("🎵 Upload file audio (.wav)", type=["wav"])
-
 col1, col2 = st.columns(2)
 threshold = col1.slider("🎚️ Threshold Kepercayaan", 0.0, 1.0, 0.7, 0.01)
 lock_speakers = col2.checkbox("🔒 Kunci hanya untuk Nadia & Vanisa", value=True)
 
-if uploaded_file is not None:
+st.markdown("### 🎙️ Input Suara")
+rec_option = st.radio("Pilih metode input:", ["Upload file", "Rekam langsung"])
+
+audio_bytes = None
+
+if rec_option == "Upload file":
+    uploaded_file = st.file_uploader("📂 Upload file audio (.wav)", type=["wav"])
+    if uploaded_file is not None:
+        audio_bytes = uploaded_file.read()
+        st.audio(audio_bytes, format="audio/wav")
+
+else:
+    st.info("Tekan tombol di bawah untuk merekam suara (maks 5 detik).")
+    audio_bytes = mic_recorder(start_prompt="🎤 Mulai Rekam", stop_prompt="⏹️ Berhenti Rekam", just_once=True)
+    if audio_bytes is not None:
+        st.audio(audio_bytes, format="audio/wav")
+
+# ============================================================
+# Prediksi & Visualisasi
+# ============================================================
+if audio_bytes:
     temp_path = "temp_audio.wav"
     with open(temp_path, "wb") as f:
-        f.write(uploaded_file.read())
-
-    st.audio(temp_path, format="audio/wav")
+        f.write(audio_bytes)
 
     with st.spinner("⏳ Menganalisis audio..."):
         speaker, status, prob, probs, labels, y, sr, err = predict_speaker(
@@ -128,27 +144,36 @@ if uploaded_file is not None:
     else:
         st.markdown("---")
         st.subheader("🎯 Hasil Prediksi")
+
+        # Warna confidence
+        if prob < 0.5:
+            color = "🔴"
+        elif prob < 0.7:
+            color = "🟡"
+        else:
+            color = "🟢"
+
         col1, col2 = st.columns(2)
         col1.metric("Speaker", speaker)
         col2.metric("Status", status)
-        st.metric("Confidence", f"{prob*100:.2f}%")
+        st.metric("Confidence", f"{prob*100:.2f}% {color}")
 
         # Tabel Probabilitas
         prob_df = pd.DataFrame({
             "Kelas": labels,
             "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
         }).sort_values("Probabilitas (%)", ascending=False)
-
         st.markdown("#### 📊 Probabilitas Tiap Kelas")
         st.dataframe(prob_df, use_container_width=True)
 
-        # Visualisasi
+        # Waveform
         st.subheader("📈 Waveform Audio")
         fig, ax = plt.subplots(figsize=(8, 3))
         librosa.display.waveshow(y, sr=sr, ax=ax)
         ax.set_title("Waveform Audio")
         st.pyplot(fig)
 
+        # Spectrogram
         st.subheader("🎛️ Mel Spectrogram")
         S = librosa.feature.melspectrogram(y=y, sr=sr)
         S_dB = librosa.power_to_db(S, ref=np.max)
@@ -158,7 +183,7 @@ if uploaded_file is not None:
         ax.set_title("Mel Spectrogram")
         st.pyplot(fig)
 
-        # Barplot probabilitas
+        # Probabilitas Barplot
         st.subheader("📉 Distribusi Probabilitas")
         plt.figure(figsize=(6, 4))
         sns.barplot(x="Kelas", y="Probabilitas (%)", data=prob_df)
@@ -166,6 +191,13 @@ if uploaded_file is not None:
         plt.ylim(0, 100)
         st.pyplot(plt)
 
+        # Analisis threshold otomatis
+        st.subheader("📈 Analisis Pengaruh Threshold")
+        th_values = np.arange(0.3, 0.95, 0.05)
+        decisions = ["Dikenal" if prob >= t else "Tidak dikenal" for t in th_values]
+        df_thresh = pd.DataFrame({"Threshold": th_values, "Status": decisions})
+        st.line_chart(df_thresh.set_index("Threshold"))
+
     os.remove(temp_path)
 else:
-    st.info("📂 Silakan upload file audio terlebih dahulu.")
+    st.info("🎧 Silakan upload atau rekam audio terlebih dahulu.")
