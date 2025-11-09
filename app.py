@@ -1,5 +1,5 @@
 # =========================================
-# APP STREAMLIT: Prediksi Suara Buka/Tutup (Versi Diperbaiki)
+# APP STREAMLIT: Prediksi Suara Buka/Tutup + Speaker
 # =========================================
 
 import streamlit as st
@@ -16,7 +16,7 @@ import seaborn as sns
 # Konfigurasi Tampilan Streamlit
 # ===============================
 st.set_page_config(
-    page_title="Prediksi Suara Buka/Tutup",
+    page_title="Prediksi Suara Buka/Tutup & Speaker",
     page_icon="🎵",
     layout="centered",
     initial_sidebar_state="collapsed"
@@ -28,7 +28,7 @@ st.set_page_config(
 @st.cache_resource
 def load_model_scaler():
     try:
-        model = joblib.load("best_audio_model.pkl")
+        model = joblib.load("best_audio_model.pkl")  # model closed-set speaker + Buka/Tutup
         scaler = joblib.load("scaler_audio.pkl")
         return model, scaler
     except Exception as e:
@@ -65,15 +65,13 @@ def mfcc_features(y, sr, n_mfcc=13):
 def extract_features_streamlit(file_path):
     y, sr = librosa.load(file_path, sr=22050)
     y = librosa.util.normalize(y)
-
-    # Samakan durasi audio (2 detik)
+    
     target_length = 2 * sr
     if len(y) < target_length:
         y = np.pad(y, (0, target_length - len(y)), mode='constant')
     else:
         y = y[:target_length]
 
-    # Ekstrak fitur
     features = [
         zero_crossing_rate(y),
         rms(y),
@@ -87,19 +85,36 @@ def extract_features_streamlit(file_path):
     return np.array(features).reshape(1, -1), y, sr
 
 # ===============================
-# Fungsi prediksi
+# Fungsi prediksi speaker + status + unknown detection
 # ===============================
-def predict_audio(file_path):
+def predict_audio(file_path, threshold=0.7):
     features, y, sr = extract_features_streamlit(file_path)
-
-    # Normalisasi fitur
     features_scaled = scaler.transform(features)
 
-    # Prediksi
-    prediction = model.predict(features_scaled)[0]
-    probabilities = model.predict_proba(features_scaled)[0]
+    probs = model.predict_proba(features_scaled)[0]
+    max_prob = np.max(probs)
+    pred_label = model.classes_[np.argmax(probs)]
 
-    return prediction, probabilities, features_scaled, y, sr
+    if max_prob < threshold:
+        speaker = "Unknown"
+        status = "Tidak diketahui"
+    else:
+        # Pisahkan label: Nadia/Vanasia vs Buka/Tutup
+        if "BUKA" in pred_label.upper():
+            status = "Buka"
+        elif "TUTUP" in pred_label.upper():
+            status = "Tutup"
+        else:
+            status = "Tidak diketahui"
+
+        if "NADIA" in pred_label.upper():
+            speaker = "Nadia"
+        elif "VANISA" in pred_label.upper():
+            speaker = "Vanisa"
+        else:
+            speaker = "Unknown"
+
+    return speaker, status, max_prob, probs, features_scaled, y, sr
 
 # ===============================
 # Header aplikasi UI
@@ -107,8 +122,8 @@ def predict_audio(file_path):
 st.markdown(
     """
     <div style="text-align:center">
-        <h1>🎧 Prediksi Suara <span style="color:#1E90FF;">Buka</span> / <span style="color:#FF6347;">Tutup</span></h1>
-        <p style="font-size:17px;">Upload file audio (.wav) untuk mendeteksi apakah suaranya <b>Buka</b> atau <b>Tutup</b>.</p>
+        <h1>🎧 Prediksi Suara Buka/Tutup & Speaker</h1>
+        <p style="font-size:17px;">Upload file audio (.wav) untuk mendeteksi siapa speaker dan apakah suaranya <b>Buka</b> atau <b>Tutup</b>.</p>
     </div>
     """,
     unsafe_allow_html=True
@@ -124,31 +139,25 @@ if uploaded_file is not None:
     try:
         with open(temp_path, "wb") as f:
             f.write(uploaded_file.read())
-
         st.audio(uploaded_file, format="audio/wav")
         st.info("🎶 File audio berhasil diunggah. Sedang diproses...")
 
         # Prediksi
-        prediction, probabilities, features_scaled, y, sr = predict_audio(temp_path)
+        speaker, status, max_prob, probabilities, features_scaled, y, sr = predict_audio(temp_path, threshold=0.75)
 
         # ===============================
         # Tampilan hasil prediksi
         # ===============================
         st.markdown("---")
         st.subheader("🎯 Hasil Prediksi")
+
         col1, col2 = st.columns(2)
         with col1:
-            st.metric(label="Prediksi", value=f"{prediction.upper()}")
+            st.metric(label="Speaker", value=f"{speaker}")
         with col2:
-            st.metric(label="Kepercayaan Model (%)", value=f"{max(probabilities)*100:.2f}%")
-
-        # Logic BUKA/TUTUP berdasarkan label model
-        if "buka" in prediction.lower():
-            st.success(f"✅ Suara ini terdeteksi sebagai **BUKA** 🔊")
-        elif "tutup" in prediction.lower():
-            st.error(f"🔒 Suara ini terdeteksi sebagai **TUTUP** 🤫")
-        else:
-            st.warning(f"❌ Label tidak dikenali: {prediction}")
+            st.metric(label="Status Suara", value=f"{status}")
+        
+        st.metric(label="Confidence Tertinggi (%)", value=f"{max_prob*100:.2f}%")
 
         # Probabilitas tiap kelas
         prob_df = pd.DataFrame({
@@ -197,7 +206,7 @@ if uploaded_file is not None:
             """
             <div style="text-align:center; color:gray; font-size:13px;">
             Model menggunakan fitur audio (ZCR, RMS, Spectral, MFCC).<br>
-            Pastikan file audio mirip dengan data training untuk hasil akurat.
+            Threshold digunakan untuk deteksi suara asing.
             </div>
             """,
             unsafe_allow_html=True
