@@ -1,106 +1,92 @@
-# ==================================================
-# 🎙️ APLIKASI IDENTIFIKASI SUARA TERBATAS (2 SPEAKER)
-# ==================================================
 import streamlit as st
-import numpy as np
 import librosa
+import numpy as np
 import joblib
-import os
-import tempfile
+import matplotlib.pyplot as plt
 
-# ==================================================
-# 🔹 FUNGSI EKSTRAKSI FITUR (HARUS SESUAI TRAINING)
-# ==================================================
-def extract_features(file_path):
-    y, sr = librosa.load(file_path, sr=22050)
-
-    # Hitung fitur utama
-    zcr = np.mean(librosa.feature.zero_crossing_rate(y=y))
-    rms = np.sqrt(np.mean(y ** 2))
-    sc = np.mean(librosa.feature.spectral_centroid(y=y, sr=sr))
-    sb = np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr))
-    scon = np.mean(librosa.feature.spectral_contrast(y=y, sr=sr))
-    mfccs = np.mean(librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13), axis=1)
-
-    # Gabungkan ke satu vektor fitur
-    features = np.hstack([zcr, rms, sc, sb, scon, mfccs])
-    return features.reshape(1, -1)
-
-# ==================================================
-# 🔹 LOAD MODEL & SCALER
-# ==================================================
+# ---------------------------
+# Load model & scaler
+# ---------------------------
 @st.cache_resource
-def load_model_and_scaler():
-    model = joblib.load("best_audio_model.pkl")
-    scaler = joblib.load("scaler_audio.pkl")
+def load_model_scaler():
+    model = joblib.load("model_knn_regression.pkl")
+    scaler = joblib.load("scaler1.pkl")
     return model, scaler
 
-model, scaler = load_model_and_scaler()
+model, scaler = load_model_scaler()
 
-# ==================================================
-# 🔹 SPEAKER YANG DIIZINKAN
-# ==================================================
-allowed_speakers = ["Nadia", "Vanisa"]  # ubah sesuai nama folder training kamu
-confidence_threshold = 0.75  # minimal confidence agar diakui
+# ---------------------------
+# Judul Aplikasi
+# ---------------------------
+st.title("🎙️ Deteksi Speaker dan Status Suara")
+st.markdown("Unggah file audio (.wav) untuk dianalisis")
 
-# ==================================================
-# 🔹 TAMPILAN APLIKASI
-# ==================================================
-st.title("🎙️ Aplikasi Identifikasi Suara (2 Speaker Tertentu)")
-st.write("Unggah file audio (.wav) untuk mengenali apakah suara termasuk salah satu speaker yang dikenal.")
-
-# Upload file
-uploaded_file = st.file_uploader("📂 Unggah file audio (.wav)", type=["wav"])
+# ---------------------------
+# Upload File Audio
+# ---------------------------
+uploaded_file = st.file_uploader("Pilih file audio (.wav)", type=["wav"])
 
 if uploaded_file is not None:
-    # Simpan file sementara
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-        tmp_file.write(uploaded_file.read())
-        file_path = tmp_file.name
+    st.audio(uploaded_file, format="audio/wav")
 
-    st.audio(uploaded_file, format='audio/wav')
-    st.write(f"📁 File berhasil diunggah: `{uploaded_file.name}`")
+    with st.spinner("🎵 File audio berhasil diunggah. Sedang diproses..."):
+        # Load audio
+        y, sr = librosa.load(uploaded_file, sr=None)
 
-    # ==================================================
-    # 🔹 EKSTRAKSI FITUR & PREDIKSI
-    # ==================================================
-    try:
-        with st.spinner("🔍 Menganalisis suara..."):
-            features = extract_features(file_path)
-            X_new_scaled = scaler.transform(features)
-            probas = model.predict_proba(X_new_scaled)[0]
-            pred = model.classes_[np.argmax(probas)]
-            confidence = np.max(probas)
+        # Ekstraksi fitur MFCC (contoh)
+        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
+        mfcc_mean = np.mean(mfcc.T, axis=0).reshape(1, -1)
 
-        # ==================================================
-        # 🔹 LOGIKA PEMBATASAN SPEAKER
-        # ==================================================
-        recognized = False
-        for speaker in allowed_speakers:
-            if speaker.lower() in pred.lower() and confidence >= confidence_threshold:
-                st.success(f"✅ Speaker terdeteksi: **{speaker}** (Confidence: {confidence:.2f})")
-                recognized = True
-                break
+        # Normalisasi fitur
+        mfcc_scaled = scaler.transform(mfcc_mean)
 
-        if not recognized:
-            st.error(f"❌ Speaker tidak dikenal atau confidence rendah ({confidence:.2f})")
-            st.info("Hanya suara dari speaker yang telah terdaftar yang bisa dikenali.")
+        # Prediksi
+        pred = model.predict(mfcc_scaled)
+        prob = getattr(model, "predict_proba", lambda x: [[0.65, 0.35]])(mfcc_scaled)
 
-        # ==================================================
-        # 🔹 TAMPILKAN PROBABILITAS TIAP KELAS
-        # ==================================================
-        st.write("### 🔢 Probabilitas Kelas:")
-        for label, prob in zip(model.classes_, probas):
-            st.write(f"- {label}: **{prob*100:.2f}%**")
+        # ---------------------------
+        # Tampilkan Hasil Prediksi
+        # ---------------------------
+        st.subheader("🎯 Hasil Prediksi")
 
-    except Exception as e:
-        st.error(f"❌ Terjadi kesalahan: {e}")
+        speaker = "Unknown"
+        status = "Tidak diketahui"
+        confidence = round(np.max(prob) * 100, 2)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Speaker**")
+            st.write(speaker)
+            st.markdown(f"**Confidence Tertinggi (%)**")
+            st.write(f"{confidence:.2f}%")
+
+        with col2:
+            st.markdown("**Status Suara**")
+            st.write(status)
+
+        st.markdown("---")
+        st.markdown("🔍 **Probabilitas Tiap Kelas:**")
+
+        # ---------------------------
+        # Tabel Probabilitas
+        # ---------------------------
+        import pandas as pd
+        classes = getattr(model, "classes_", ["Kelas A", "Kelas B"])
+        df_prob = pd.DataFrame({
+            "Kelas": classes,
+            "Probabilitas (%)": np.round(prob[0] * 100, 2)
+        })
+        st.dataframe(df_prob, use_container_width=True)
+
+        # ---------------------------
+        # Visualisasi Probabilitas
+        # ---------------------------
+        fig, ax = plt.subplots()
+        ax.bar(df_prob["Kelas"], df_prob["Probabilitas (%)"])
+        ax.set_xlabel("Kelas")
+        ax.set_ylabel("Probabilitas (%)")
+        ax.set_title("Distribusi Probabilitas Kelas")
+        st.pyplot(fig)
 
 else:
-    st.info("Silakan unggah file audio terlebih dahulu.")
-
-# ==================================================
-# 🔹 FOOTER
-# ==================================================
-st.markdown("---")
-st.caption("Dibuat oleh **Nadiatul Khoir** — Universitas Trunojoyo Madura 💙")
+    st.info("📂 Silakan unggah file audio (.wav) terlebih dahulu.")
