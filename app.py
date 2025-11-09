@@ -1,5 +1,5 @@
 # =========================================
-# 🎧 APP STREAMLIT: Prediksi Suara Buka/Tutup + Speaker (Final Version)
+# APP STREAMLIT: Prediksi Suara Buka/Tutup + Speaker (Final & Stabil)
 # =========================================
 
 import streamlit as st
@@ -23,7 +23,7 @@ st.set_page_config(
 )
 
 # =========================================
-# Load model dan scaler
+# Load Model dan Scaler
 # =========================================
 @st.cache_resource
 def load_model_scaler():
@@ -37,8 +37,11 @@ def load_model_scaler():
 
 model, scaler = load_model_scaler()
 
+# Ambil daftar speaker otomatis dari model
+known_speakers = sorted(set([cls.split("_")[0].lower() for cls in model.classes_]))
+
 # =========================================
-# FUNGSI EKSTRAKSI FITUR (identik dengan versi training)
+# Fungsi Ekstraksi Fitur (sesuai model training)
 # =========================================
 def zero_crossing_rate(y):
     return np.mean(librosa.feature.zero_crossing_rate(y=y).T, axis=0)[0]
@@ -60,7 +63,6 @@ def mfcc_features(y, sr, n_mfcc=13):
     return np.mean(mfccs, axis=1)
 
 def extract_features_streamlit(file_path):
-    """Ekstraksi fitur sama persis dengan pipeline training"""
     y, sr = librosa.load(file_path, sr=22050)
     features = [
         zero_crossing_rate(y),
@@ -74,34 +76,27 @@ def extract_features_streamlit(file_path):
     return np.array(features).reshape(1, -1), y, sr
 
 # =========================================
-# 🔹 Fungsi Prediksi (Versi Final)
+# Fungsi Prediksi Audio
 # =========================================
-def predict_audio(file_path, threshold=0.7):
+def predict_audio(file_path, threshold=0.6):
     features, y, sr = extract_features_streamlit(file_path)
 
-    # Validasi jumlah fitur
     if features.shape[1] != scaler.n_features_in_:
         st.error(f"❌ Jumlah fitur tidak cocok dengan scaler: {features.shape[1]} vs {scaler.n_features_in_}")
         st.stop()
 
-    # Normalisasi fitur
     features_scaled = scaler.transform(features)
-
-    # Prediksi probabilitas
     probs = model.predict_proba(features_scaled)[0]
     max_prob = np.max(probs)
     pred_label = model.classes_[np.argmax(probs)]
 
-    # Pisah nama dan status (contoh: nadia_buka → nadia, buka)
+    # Pisah nama speaker dan status
     if "_" in pred_label:
         speaker_name, status = pred_label.split("_")
     else:
         speaker_name, status = pred_label, "-"
 
-    # Daftar speaker yang dikenal
-    known_speakers = ["nadia", "vanisa"]
-
-    # Logika Unknown
+    # Logika Unknown: di luar daftar known_speakers ATAU confidence rendah
     if speaker_name.lower() not in known_speakers or max_prob < threshold:
         speaker = "Unknown"
         status = "Tidak diketahui"
@@ -116,33 +111,32 @@ def predict_audio(file_path, threshold=0.7):
 # UI: Header
 # =========================================
 st.markdown(
-    """
+    f"""
     <div style="text-align:center">
         <h1>🎧 Prediksi Suara Buka/Tutup & Speaker</h1>
-        <p style="font-size:17px;">Upload file audio (.wav) untuk mendeteksi <b>siapa speakernya</b> dan <b>apakah suaranya Buka atau Tutup</b>.</p>
+        <p style="font-size:17px;">Upload file audio (.wav) untuk mendeteksi siapa speaker dan apakah suaranya <b>Buka</b> atau <b>Tutup</b>.</p>
+        <p style="color:gray; font-size:14px;">Speaker yang dikenali model: <b>{", ".join([s.capitalize() for s in known_speakers])}</b></p>
     </div>
     """,
     unsafe_allow_html=True
 )
 
 # =========================================
-# Upload File Audio
+# Upload File
 # =========================================
 uploaded_file = st.file_uploader("🎵 Pilih file audio (.wav)", type=["wav"])
 
 if uploaded_file is not None:
     temp_path = "temp_audio.wav"
     try:
-        # Simpan file sementara
         with open(temp_path, "wb") as f:
             f.write(uploaded_file.read())
 
-        # Tampilkan audio player
         st.audio(temp_path, format="audio/wav")
         st.info("🎶 File audio berhasil diunggah. Sedang diproses...")
 
         # Prediksi
-        speaker, status, max_prob, probs, features_scaled, y, sr = predict_audio(temp_path, threshold=0.7)
+        speaker, status, max_prob, probs, features_scaled, y, sr = predict_audio(temp_path, threshold=0.6)
 
         # =========================================
         # Hasil Prediksi
@@ -158,7 +152,7 @@ if uploaded_file is not None:
 
         st.metric(label="Confidence (%)", value=f"{max_prob*100:.2f}%")
 
-        # Probabilitas tiap kelas
+        # Probabilitas per kelas
         prob_df = pd.DataFrame({
             "Kelas": model.classes_,
             "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
@@ -170,8 +164,6 @@ if uploaded_file is not None:
         # =========================================
         # Visualisasi Audio
         # =========================================
-
-        # Waveform
         st.subheader("📈 Waveform Audio")
         fig, ax = plt.subplots(figsize=(8, 3))
         librosa.display.waveshow(y, sr=sr, ax=ax)
@@ -180,7 +172,6 @@ if uploaded_file is not None:
         ax.set_ylabel("Amplitudo")
         st.pyplot(fig)
 
-        # Mel-Spectrogram
         st.subheader("📊 Mel Spectrogram")
         S = librosa.feature.melspectrogram(y=y, sr=sr)
         S_dB = librosa.power_to_db(S, ref=np.max)
@@ -190,7 +181,6 @@ if uploaded_file is not None:
         ax.set_title("Mel Spectrogram")
         st.pyplot(fig)
 
-        # Probabilitas Barplot
         st.subheader("📊 Distribusi Probabilitas Prediksi")
         plt.figure(figsize=(6, 4))
         sns.barplot(x="Kelas", y="Probabilitas (%)", data=prob_df)
@@ -199,19 +189,17 @@ if uploaded_file is not None:
         plt.tight_layout()
         st.pyplot(plt)
 
-        # Debug Info
         with st.expander("🧠 Debug Info"):
             st.write("Fitur hasil ekstraksi (18 dimensi):")
             st.dataframe(pd.DataFrame(features_scaled, columns=[f'feat_{i+1}' for i in range(features_scaled.shape[1])]))
             st.write("Probabilitas mentah:", probs)
 
-        # Footer
         st.markdown(
             """
             <div style="text-align:center; color:gray; font-size:13px;">
             Model menggunakan fitur audio (ZCR, RMS, Spectral, MFCC).<br>
-            Threshold digunakan untuk mendeteksi suara asing (Unknown).<br>
-            Unknown hanya muncul jika bukan suara Nadia atau Vanisa.
+            Threshold digunakan untuk menandai suara asing (Unknown).<br>
+            Jika confidence rendah, hasil bisa dianggap tidak pasti.
             </div>
             """,
             unsafe_allow_html=True
