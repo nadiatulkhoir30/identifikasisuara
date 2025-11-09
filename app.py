@@ -12,6 +12,8 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 import tempfile
+import threading
+import time
 
 # ====== Untuk rekam audio di browser ======
 from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode
@@ -98,23 +100,27 @@ def predict_audio(file_path, threshold=0.6):
     return speaker.capitalize(), status, pred_prob, probs, labels, y, sr
 
 # ============================================================
-# AudioProcessor untuk WebRTC
+# AudioProcessor untuk WebRTC (rekam dan simpan sementara)
 # ============================================================
 class AudioProcessor(AudioProcessorBase):
     def __init__(self):
         self.audio_file = None
+        self.last_frame_time = time.time()
+        self.lock = threading.Lock()
 
     def recv_audio(self, frame: av.AudioFrame) -> av.AudioFrame:
         audio_array = frame.to_ndarray()
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         librosa.output.write_wav(tmp_file.name, audio_array.astype(np.float32), sr=22050)
-        self.audio_file = tmp_file.name
+        with self.lock:
+            self.audio_file = tmp_file.name
+            self.last_frame_time = time.time()
         return frame
 
 # ============================================================
 # UI Streamlit
 # ============================================================
-st.title("🎧 Prediksi Suara Buka/Tutup")
+st.title("🎧 Prediksi Suara Buka/Tutup Otomatis")
 st.markdown(
     """
     <p style="font-size:16px;">Aplikasi ini hanya menerima suara dari <b>Nadia</b> dan <b>Vanisa</b>.<br>
@@ -150,10 +156,10 @@ if input_mode == "Upload File":
             f.write(uploaded_file.read())
 
 # =========================
-# Rekam Suara via Browser
+# Rekam Suara via Browser (otomatis prediksi)
 # =========================
 else:
-    st.info("🎤 Klik START untuk rekam, lalu klik tombol 'Prediksi' setelah selesai")
+    st.info("🎤 Klik START untuk rekam. Prediksi otomatis setelah selesai merekam.")
     webrtc_ctx = webrtc_streamer(
         key="audio",
         mode=WebRtcMode.SENDONLY,
@@ -163,12 +169,15 @@ else:
     )
 
     if webrtc_ctx.audio_processor:
-        if st.button("Prediksi"):
-            temp_path = webrtc_ctx.audio_processor.audio_file
-            if temp_path and os.path.exists(temp_path):
-                st.audio(temp_path, format="audio/wav")
-            else:
-                st.warning("⏳ Rekaman belum selesai atau belum ada file audio")
+        st.info("⏳ Tunggu beberapa detik setelah selesai bicara, prediksi akan otomatis muncul...")
+        while True:
+            time.sleep(1)  # cek tiap 1 detik
+            with webrtc_ctx.audio_processor.lock:
+                if webrtc_ctx.audio_processor.audio_file:
+                    # jika frame terakhir lebih dari 2 detik lalu, anggap rekaman selesai
+                    if time.time() - webrtc_ctx.audio_processor.last_frame_time > 2:
+                        temp_path = webrtc_ctx.audio_processor.audio_file
+                        break
 
 # =========================
 # Prediksi jika file tersedia
