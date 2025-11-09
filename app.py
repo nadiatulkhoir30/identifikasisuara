@@ -1,5 +1,5 @@
 # ============================================================
-# 🎧 STREAMLIT APP — Prediksi Suara Buka/Tutup (Locked to Nadia & Vanisa)
+# 🎧 STREAMLIT APP — Prediksi Suara Buka/Tutup (Nadia & Vanisa Only)
 # ============================================================
 
 import streamlit as st
@@ -77,17 +77,14 @@ def predict_audio(file_path, threshold=0.6):
     probs = model.predict_proba(features_scaled)[0]
     labels = model.classes_
 
-    # Temukan prediksi tertinggi
     idx_top = np.argmax(probs)
     pred_label = labels[idx_top]
     pred_prob = probs[idx_top]
 
-    # Pisahkan speaker & status
     parts = pred_label.lower().split("_")
     speaker = parts[0] if len(parts) > 0 else "unknown"
     status = parts[1].capitalize() if len(parts) > 1 else "-"
 
-    # ✅ Hanya izinkan Nadia & Vanisa
     allowed = ["nadia", "vanisa"]
     if speaker not in allowed or pred_prob < threshold:
         speaker = "Unknown"
@@ -107,6 +104,17 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# 🧩 Tambahkan slider untuk atur threshold
+st.sidebar.header("⚙️ Pengaturan Model")
+threshold = st.sidebar.slider(
+    "Ambang Confidence (Threshold)",
+    min_value=0.3,
+    max_value=0.9,
+    value=0.6,
+    step=0.05,
+    help="Semakin tinggi nilainya, semakin ketat sistem dalam mengenali suara.",
+)
+
 uploaded_file = st.file_uploader("🎵 Upload file audio (.wav)", type=["wav"])
 
 if uploaded_file is not None:
@@ -117,9 +125,8 @@ if uploaded_file is not None:
     st.audio(temp_path, format="audio/wav")
 
     with st.spinner("⏳ Memproses audio..."):
-        speaker, status, prob, probs, labels, y, sr = predict_audio(temp_path)
+        speaker, status, prob, probs, labels, y, sr = predict_audio(temp_path, threshold)
 
-    # Hasil Prediksi
     st.markdown("---")
     st.subheader("🎯 Hasil Prediksi")
 
@@ -177,7 +184,6 @@ if uploaded_file is not None:
     plt.tight_layout()
     st.pyplot(plt)
 
-    # Hapus file sementara
     os.remove(temp_path)
 else:
     st.info("📂 Silakan upload file audio terlebih dahulu.")
