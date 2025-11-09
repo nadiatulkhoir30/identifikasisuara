@@ -11,6 +11,9 @@ import joblib
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
+import sounddevice as sd
+from scipy.io.wavfile import write
+import tempfile
 
 # ============================================================
 # Konfigurasi Streamlit
@@ -93,6 +96,17 @@ def predict_audio(file_path, threshold=0.6):
     return speaker.capitalize(), status, pred_prob, probs, labels, y, sr
 
 # ============================================================
+# Fungsi rekam audio dari mic
+# ============================================================
+def record_audio(duration=3, fs=22050):
+    st.info(f"🎙️ Rekam selama {duration} detik...")
+    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1)
+    sd.wait()
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    write(tmp_file.name, fs, recording)
+    return tmp_file.name
+
+# ============================================================
 # UI Streamlit
 # ============================================================
 st.title("🎧 Prediksi Suara Buka/Tutup")
@@ -104,7 +118,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# 🧩 Tambahkan slider untuk atur threshold
 st.sidebar.header("⚙️ Pengaturan Model")
 threshold = st.sidebar.slider(
     "Ambang Confidence (Threshold)",
@@ -115,22 +128,28 @@ threshold = st.sidebar.slider(
     help="Semakin tinggi nilainya, semakin ketat sistem dalam mengenali suara.",
 )
 
-uploaded_file = st.file_uploader("🎵 Upload file audio (.wav)", type=["wav"])
+# Pilihan input: Upload atau Rekam
+input_mode = st.radio("Pilih metode input audio:", ("Upload File", "Rekam Suara"))
 
-if uploaded_file is not None:
-    temp_path = "temp_audio.wav"
-    with open(temp_path, "wb") as f:
-        f.write(uploaded_file.read())
+if input_mode == "Upload File":
+    uploaded_file = st.file_uploader("🎵 Upload file audio (.wav)", type=["wav"])
+    if uploaded_file is not None:
+        temp_path = "temp_audio.wav"
+        with open(temp_path, "wb") as f:
+            f.write(uploaded_file.read())
+else:
+    if st.button("🎤 Mulai Rekam"):
+        temp_path = record_audio(duration=3)  # durasi rekam 3 detik
+        st.audio(temp_path, format="audio/wav")
 
+# Prediksi jika file ada
+if 'temp_path' in locals() and os.path.exists(temp_path):
     st.audio(temp_path, format="audio/wav")
-
     with st.spinner("⏳ Memproses audio..."):
         speaker, status, prob, probs, labels, y, sr = predict_audio(temp_path, threshold)
 
     st.markdown("---")
     st.subheader("🎯 Hasil Prediksi")
-
-    # Tata letak hasil prediksi rapi
     col1, col2 = st.columns(2)
     with col1:
         st.metric("Speaker", speaker)
@@ -139,9 +158,6 @@ if uploaded_file is not None:
 
     st.metric("Confidence (%)", f"{prob*100:.2f}%")
 
-    # =============================
-    # Tabel Probabilitas — statis (tidak gerak)
-    # =============================
     prob_df = pd.DataFrame({
         "Kelas": labels,
         "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
@@ -155,9 +171,6 @@ if uploaded_file is not None:
         ])
     )
 
-    # =============================
-    # Visualisasi Audio
-    # =============================
     st.subheader("📈 Waveform Audio")
     fig, ax = plt.subplots(figsize=(8, 3))
     librosa.display.waveshow(y, sr=sr, ax=ax)
@@ -173,9 +186,6 @@ if uploaded_file is not None:
     ax.set_title("Mel Spectrogram", fontsize=12)
     st.pyplot(fig)
 
-    # =============================
-    # Distribusi Probabilitas
-    # =============================
     st.subheader("📉 Distribusi Probabilitas")
     plt.figure(figsize=(6, 4))
     sns.barplot(x="Kelas", y="Probabilitas (%)", data=prob_df)
@@ -186,4 +196,4 @@ if uploaded_file is not None:
 
     os.remove(temp_path)
 else:
-    st.info("📂 Silakan upload file audio terlebih dahulu.")
+    st.info("📂 Silakan upload atau rekam audio terlebih dahulu.")
