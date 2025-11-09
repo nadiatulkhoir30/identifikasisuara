@@ -1,82 +1,74 @@
-import streamlit as st
-import numpy as np
 import librosa
-import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import joblib
-import tempfile
-from pydub import AudioSegment
 
-# ------------------------------
+# -------------------------------
 # Load model dan scaler
-# ------------------------------
-@st.cache_resource
-def load_model_scaler():
-    model = joblib.load("model_knn_regression.pkl")
-    scaler = joblib.load("scaler1.pkl")
-    return model, scaler
+# -------------------------------
+best_model = joblib.load("best_audio_model.pkl")
+scaler = joblib.load("scaler_audio.pkl")
 
-model, scaler = load_model_scaler()
+# -------------------------------
+# Daftar orang yang diizinkan
+# -------------------------------
+allowed_people = ["Nadia", "Vanisa"]  # hanya orang ini
+confidence_threshold = 0.6  # threshold minimal confidence
 
-# ------------------------------
-# Fungsi ekstraksi fitur audio
-# ------------------------------
-def extract_features(file_path):
-    y, sr = librosa.load(file_path, sr=44100)
-    stft = np.abs(librosa.stft(y))
-    features = np.array([
-        np.mean(librosa.feature.chroma_stft(S=stft, sr=sr)),
-        np.mean(librosa.feature.rms(y=y)),
-        np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)),
-        np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr)),
-        np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr)),
-        np.mean(librosa.feature.zero_crossing_rate(y)),
-        np.mean(librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13))
-    ])
-    return features
+# -------------------------------
+# Fungsi ekstraksi fitur
+# -------------------------------
+def extract_features(file_path, sr=22050, n_mfcc=13):
+    y, sr = librosa.load(file_path, sr=sr)
+    y, _ = librosa.effects.trim(y)
+    y = librosa.util.normalize(y)
+    
+    zcr = np.mean(librosa.feature.zero_crossing_rate(y).T, axis=0)[0]
+    rms = np.sqrt(np.mean(y**2))
+    spectral_centroid = np.mean(librosa.feature.spectral_centroid(y=y, sr=sr))
+    spectral_bandwidth = np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr))
+    spectral_contrast = np.mean(librosa.feature.spectral_contrast(y=y, sr=sr))
+    mfccs = np.mean(librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc), axis=1)
+    
+    features = [zcr, rms, spectral_centroid, spectral_bandwidth, spectral_contrast] + mfccs.tolist()
+    return np.array(features).reshape(1, -1)
 
-# ------------------------------
-# Halaman Streamlit
-# ------------------------------
-st.title("🎵 Aplikasi Prediksi Audio (KNN Regression)")
+# -------------------------------
+# Fungsi prediksi dengan filter
+# -------------------------------
+def predict_audio(file_path):
+    features = extract_features(file_path)
+    features_scaled = scaler.transform(features)
+    
+    pred_label = best_model.predict(features_scaled)[0]
+    pred_prob = best_model.predict_proba(features_scaled).max() if hasattr(best_model, "predict_proba") else np.nan
+    
+    # Ambil nama orang dari label (misal "Nadia_buka")
+    person_name = pred_label.split("_")[0]
+    
+    # Filter: hanya allowed_people dan confidence > threshold
+    if person_name not in allowed_people or pred_prob < confidence_threshold:
+        pred_label = "Tidak dikenal"
+    
+    return {"file": file_path, "pred_label": pred_label, "confidence": pred_prob}
 
-uploaded_file = st.file_uploader("Unggah file audio (.m4a / .wav)", type=["m4a", "wav"])
+# -------------------------------
+# Contoh file audio
+# -------------------------------
+audio_files = [
+    "clean_audio/Nadia/buka/buka 1.wav",
+    "clean_audio/Nadia/tutup/tutup1.wav",
+    "clean_audio/ulva_tutup.wav"  # contoh orang lain
+]
 
-if uploaded_file is not None:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_wav:
-        if uploaded_file.name.endswith(".m4a"):
-            # Konversi m4a ke wav
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as tmp_m4a:
-                tmp_m4a.write(uploaded_file.read())
-                audio = AudioSegment.from_file(tmp_m4a.name, format="m4a")
-                audio.export(tmp_wav.name, format="wav")
-        else:
-            tmp_wav.write(uploaded_file.read())
-        
-        st.audio(tmp_wav.name, format="audio/wav")
-        st.success("✅ File audio berhasil diproses")
+# -------------------------------
+# Prediksi semua file
+# -------------------------------
+results = [predict_audio(f) for f in audio_files]
+df_results = pd.DataFrame(results)
+print("✅ Hasil Prediksi Audio Baru:")
+print(df_results)
 
-        # Ekstraksi fitur
-        features = extract_features(tmp_wav.name)
-        st.write("📊 Fitur audio hasil ekstraksi:")
-        st.write(features)
-
-        # Normalisasi
-        scaled_features = scaler.transform([features])
-
-        # Prediksi
-        prediction = model.predict(scaled_features)[0]
-        st.subheader(f"🎯 Hasil Prediksi: {prediction:.6f}")
-
-        # ------------------------------
-        # Visualisasi Spektrogram
-        # ------------------------------
-        st.subheader("🎨 Spektrogram Audio")
-        y, sr = librosa.load(tmp_wav.name, sr=44100)
-        S = librosa.feature.melspectrogram(y=y, sr=sr)
-        S_dB = librosa.power_to_db(S, ref=np.max)
-
-        fig, ax = plt.subplots(figsize=(8, 3))
-        img = librosa.display.specshow(S_dB, sr=sr, x_axis='time', y_axis='mel', ax=ax)
-        fig.colorbar(img, ax=ax, format='%+2.0f dB')
-        ax.set(title='Mel-frequency spectrogram')
-        st.pyplot(fig)
+# Simpan ke CSV
+df_results.to_csv("prediksi_audio_filtered.csv", index=False)
+print("✅ Hasil prediksi disimpan ke 'prediksi_audio_filtered.csv'")
