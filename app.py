@@ -1,47 +1,24 @@
-# ============================================================
-# 🎧 STREAMLIT APP — Prediksi Suara Buka/Tutup (Nadia & Vanisa)
-# ============================================================
-
-import streamlit as st
+# ==================================================
+# 🔹 IMPORT LIBRARY
+# ==================================================
+import os
 import numpy as np
 import pandas as pd
 import librosa
-import librosa.display
 import joblib
-import os
-import matplotlib.pyplot as plt
-import seaborn as sns
+import streamlit as st
 import soundfile as sf
+import matplotlib.pyplot as plt
 
-# ============================================================
-# ⚙️ Konfigurasi Streamlit
-# ============================================================
-st.set_page_config(
-    page_title="Prediksi Suara Buka/Tutup",
-    page_icon="🎵",
-    layout="centered",
-)
+# ==================================================
+# 🔹 LOAD MODEL DAN SCALER
+# ==================================================
+model = joblib.load("best_audio_model.pkl")
+scaler = joblib.load("scaler_audio.pkl")
 
-st.title("🎧 Prediksi Suara Buka/Tutup")
-st.markdown(
-    "Aplikasi ini memprediksi siapa yang berbicara dan apakah suaranya **Buka** atau **Tutup**. "
-    "Kamu bisa mengatur ambang batas (*threshold*) dan memilih apakah hanya menerima suara **Nadia** dan **Vanisa** saja."
-)
-
-# ============================================================
-# 🔹 Load Model & Scaler
-# ============================================================
-@st.cache_resource
-def load_model_scaler():
-    model = joblib.load("best_audio_model.pkl")
-    scaler = joblib.load("scaler_audio.pkl")
-    return model, scaler
-
-model, scaler = load_model_scaler()
-
-# ============================================================
-# 🎵 Fungsi Ekstraksi Fitur
-# ============================================================
+# ==================================================
+# 🔹 FUNGSI EKSTRAKSI FITUR
+# ==================================================
 def zero_crossing_rate(y):
     return np.mean(librosa.feature.zero_crossing_rate(y=y).T, axis=0)[0]
 
@@ -62,13 +39,7 @@ def mfcc_features(y, sr, n_mfcc=13):
     return np.mean(mfccs, axis=1)
 
 def extract_features(file_path):
-    try:
-        y, sr = librosa.load(file_path, sr=22050)
-        if len(y) < 2200:
-            raise ValueError("Durasi audio terlalu pendek (<0.1 detik)")
-    except Exception as e:
-        raise RuntimeError(f"Gagal memuat audio: {e}")
-
+    y, sr = librosa.load(file_path, sr=22050)
     features = [
         zero_crossing_rate(y),
         rms(y),
@@ -80,119 +51,112 @@ def extract_features(file_path):
     features.extend(mfccs.tolist())
     return np.array(features).reshape(1, -1), y, sr
 
-# ============================================================
-# 🔍 Fungsi Prediksi
-# ============================================================
-def predict_speaker(file_path, threshold=0.7, lock_speakers=True):
+# ==================================================
+# 🔹 FUNGSI PREDIKSI DENGAN THRESHOLD
+# ==================================================
+def predict_speaker(file_path, threshold=0.7):
     features, y, sr = extract_features(file_path)
-
+    
     if features.shape[1] != scaler.n_features_in_:
-        return None, None, None, None, y, sr, "❌ Jumlah fitur tidak cocok dengan scaler."
+        st.error(f"Jumlah fitur tidak cocok ({features.shape[1]} != {scaler.n_features_in_})")
+        return None, None, None, None, y, sr
 
     features_scaled = scaler.transform(features)
     probs = model.predict_proba(features_scaled)[0]
-    labels = model.classes_
-
     max_prob = np.max(probs)
-    pred_label = labels[np.argmax(probs)]
-    speaker_name = pred_label.split("_")[0].lower()
+    pred_label = model.classes_[np.argmax(probs)]
 
-    allowed = ["nadia", "vanisa"]
-
-    if (lock_speakers and speaker_name not in allowed) or (max_prob < threshold):
-        speaker_name = "Unknown"
-        status = "Tidak diketahui"
+    if max_prob < threshold:
+        return "Unknown", "Tidak diketahui", probs, model.classes_, y, sr
     else:
-        status = pred_label.split("_")[1].capitalize() if "_" in pred_label else "-"
+        return pred_label, f"{max_prob:.2f}", probs, model.classes_, y, sr
 
-    return speaker_name.capitalize(), status, max_prob, probs, labels, y, sr, None
+# ==================================================
+# 🔹 STREAMLIT UI
+# ==================================================
+st.set_page_config(page_title="🔊 Voice Recognition", layout="wide")
+st.title("🎙️ Voice Recognition - Speaker Identification")
 
-# ============================================================
-# 🧠 UI Streamlit
-# ============================================================
-uploaded_file = st.file_uploader("🎵 Upload file audio (.wav)", type=["wav"])
-
-col1, col2 = st.columns(2)
-threshold = col1.slider("🎚️ Threshold Kepercayaan", 0.0, 1.0, 0.7, 0.01)
-lock_speakers = col2.checkbox("🔒 Hanya terima Nadia & Vanisa", value=True)
+uploaded_file = st.file_uploader("Unggah file audio (.wav)", type=["wav"])
+threshold = st.slider("Atur Threshold Kepercayaan", 0.0, 1.0, 0.7, 0.01)
 
 if uploaded_file is not None:
     temp_path = "temp_audio.wav"
     with open(temp_path, "wb") as f:
         f.write(uploaded_file.read())
 
-    st.audio(temp_path, format="audio/wav")
+    with st.spinner("🔍 Sedang menganalisis suara..."):
+        speaker, confidence, probs, labels, y, sr = predict_speaker(temp_path, threshold)
 
-    with st.spinner("⏳ Menganalisis audio..."):
-        try:
-            speaker, status, prob, probs, labels, y, sr, err = predict_speaker(
-                temp_path, threshold=threshold, lock_speakers=lock_speakers
-            )
-        except Exception as e:
-            st.error(f"Gagal menganalisis audio: {e}")
-            os.remove(temp_path)
-            st.stop()
-
-    if err:
-        st.error(err)
-    else:
-        st.markdown("---")
+    if probs is not None:
+        # ==================================================
+        # 🔹 TAMPILKAN HASIL PREDIKSI
+        # ==================================================
         st.subheader("🎯 Hasil Prediksi")
-
         col1, col2 = st.columns(2)
-        col1.metric("Speaker", speaker)
-        col2.metric("Status", status)
+        with col1:
+            st.metric("Speaker", speaker)
+        with col2:
+            if speaker == "Unknown":
+                st.metric("Status Suara", "❌ Tidak dikenali")
+            else:
+                st.metric("Status Suara", "✅ Dikenali")
 
-        st.metric("Confidence", f"{prob*100:.2f}%")
-
-        # ============================================================
-        # 📊 Probabilitas per kelas
-        # ============================================================
+        # ==================================================
+        # 🔹 PROBABILITAS PER KELAS
+        # ==================================================
+        st.markdown("#### 📊 Probabilitas Tiap Kelas")
         prob_df = pd.DataFrame({
             "Kelas": labels,
-            "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
-        }).sort_values("Probabilitas (%)", ascending=False)
+            "Probabilitas (%)": (probs * 100).round(2)
+        })
+        prob_df["Status"] = np.where(
+            prob_df["Kelas"] == labels[np.argmax(probs)],
+            "🎯 Tertinggi",
+            ""
+        )
+        prob_df = prob_df.sort_values("Probabilitas (%)", ascending=False).reset_index(drop=True)
 
-        st.markdown("#### 📈 Probabilitas Tiap Kelas")
-        st.dataframe(prob_df, use_container_width=True)
+        # Warna otomatis berdasarkan nilai probabilitas
+        def color_confidence(val):
+            color = ""
+            if val >= 70:
+                color = "#22c55e"  # hijau
+            elif val >= 40:
+                color = "#eab308"  # kuning
+            else:
+                color = "#ef4444"  # merah
+            return f"color: {color}; font-weight: bold;"
 
-        # Tambahan: progress bar tiap kelas
+        st.dataframe(
+            prob_df.style.applymap(color_confidence, subset=["Probabilitas (%)"]),
+            use_container_width=True,
+            height=240
+        )
+
+        # ==================================================
+        # 🔹 PROGRESS BAR UNTUK TIAP KELAS
+        # ==================================================
+        st.markdown("#### 📈 Confidence per Kelas")
         for _, row in prob_df.iterrows():
             st.write(f"**{row['Kelas']}** — {row['Probabilitas (%)']}%")
             st.progress(int(row["Probabilitas (%)"]))
 
-        # ============================================================
-        # 🎵 Waveform
-        # ============================================================
-        st.subheader("🔊 Waveform Audio")
-        fig, ax = plt.subplots(figsize=(8, 3))
+        # ==================================================
+        # 🔹 WAVEFORM AUDIO
+        # ==================================================
+        st.markdown("#### 🎵 Waveform Audio")
+        fig, ax = plt.subplots(figsize=(10, 3))
         librosa.display.waveshow(y, sr=sr, ax=ax, color="#2563eb")
-        ax.set_title("Waveform Audio")
+        ax.set_title("Visualisasi Gelombang Suara")
+        ax.set_xlabel("Waktu (detik)")
+        ax.set_ylabel("Amplitudo")
         st.pyplot(fig)
 
-        # ============================================================
-        # 🌈 Mel Spectrogram
-        # ============================================================
-        st.subheader("🎛️ Mel Spectrogram")
-        S = librosa.feature.melspectrogram(y=y, sr=sr)
-        S_dB = librosa.power_to_db(S, ref=np.max)
-        fig, ax = plt.subplots(figsize=(10, 4))
-        img = librosa.display.specshow(S_dB, sr=sr, x_axis='time', y_axis='mel', ax=ax, cmap='magma')
-        fig.colorbar(img, ax=ax, format='%+2.0f dB')
-        ax.set_title("Mel Spectrogram")
-        st.pyplot(fig)
+        # ==================================================
+        # 🔹 PEMUTAR AUDIO
+        # ==================================================
+        st.audio(temp_path, format="audio/wav")
 
-        # ============================================================
-        # 📉 Barplot
-        # ============================================================
-        st.subheader("📉 Distribusi Probabilitas")
-        plt.figure(figsize=(6, 4))
-        sns.barplot(x="Kelas", y="Probabilitas (%)", data=prob_df, palette="viridis")
-        plt.xticks(rotation=30)
-        plt.ylim(0, 100)
-        st.pyplot(plt)
-
-    os.remove(temp_path)
-
-else:
-    st.info("📂 Silakan upload file audio terlebih dahulu.")
+        # Hapus file sementara
+        os.remove(temp_path)
