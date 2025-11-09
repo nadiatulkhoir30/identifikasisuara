@@ -107,7 +107,6 @@ class AudioProcessor(AudioProcessorBase):
     def recv_audio(self, frame: av.AudioFrame) -> av.AudioFrame:
         audio_array = frame.to_ndarray()
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        # convert to float32 jika perlu
         librosa.output.write_wav(tmp_file.name, audio_array.astype(np.float32), sr=22050)
         self.audio_file = tmp_file.name
         return frame
@@ -154,7 +153,7 @@ if input_mode == "Upload File":
 # Rekam Suara via Browser
 # =========================
 else:
-    st.info("🎤 Klik tombol START di bawah untuk rekam suara melalui browser")
+    st.info("🎤 Klik START untuk rekam, lalu klik tombol 'Prediksi' setelah selesai")
     webrtc_ctx = webrtc_streamer(
         key="audio",
         mode=WebRtcMode.SENDONLY,
@@ -162,9 +161,14 @@ else:
         media_stream_constraints={"audio": True, "video": False},
         async_processing=True,
     )
-    if webrtc_ctx.audio_processor and webrtc_ctx.audio_processor.audio_file:
-        temp_path = webrtc_ctx.audio_processor.audio_file
-        st.audio(temp_path, format="audio/wav")
+
+    if webrtc_ctx.audio_processor:
+        if st.button("Prediksi"):
+            temp_path = webrtc_ctx.audio_processor.audio_file
+            if temp_path and os.path.exists(temp_path):
+                st.audio(temp_path, format="audio/wav")
+            else:
+                st.warning("⏳ Rekaman belum selesai atau belum ada file audio")
 
 # =========================
 # Prediksi jika file tersedia
