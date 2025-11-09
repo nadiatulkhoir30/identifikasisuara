@@ -11,8 +11,9 @@ import joblib
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
+import tempfile
+import base64
 from io import BytesIO
-import soundfile as sf
 
 # ============================================================
 # Konfigurasi Streamlit
@@ -104,17 +105,17 @@ def predict_speaker(file_path, threshold=0.7, lock_speakers=True):
     return speaker_name.capitalize(), status, max_prob, probs, labels, y, sr, None
 
 # ============================================================
-# UI Streamlit
+# Komponen Perekam Suara (HTML + JS)
 # ============================================================
-
-col1, col2 = st.columns(2)
-threshold = col1.slider("🎚️ Threshold Kepercayaan", 0.0, 1.0, 0.7, 0.01)
-lock_speakers = col2.checkbox("🔒 Kunci hanya untuk Nadia & Vanisa", value=True)
-
 st.markdown("### 🎙️ Pilih Input Suara")
 mode = st.radio("Pilih metode input:", ["Upload File", "Rekam Langsung"], horizontal=True)
 
 audio_data = None
+
+# 🎚️ Threshold & Lock Speaker
+col1, col2 = st.columns(2)
+threshold = col1.slider("🎚️ Threshold Kepercayaan", 0.0, 1.0, 0.7, 0.01)
+lock_speakers = col2.checkbox("🔒 Kunci hanya untuk Nadia & Vanisa", value=True)
 
 # ============ Mode Upload File ============
 if mode == "Upload File":
@@ -128,57 +129,47 @@ if mode == "Upload File":
 
 # ============ Mode Rekam Langsung ============
 elif mode == "Rekam Langsung":
-    st.markdown(
-        """
-        🎤 Klik tombol di bawah untuk merekam suara langsung dari browser.
-        Setelah selesai, unduh file hasil rekaman dan unggah kembali di kolom upload di atas.
-        """
-    )
-    st.components.v1.html("""
-        <div style="text-align:center">
-            <button id="startBtn">🎙️ Mulai Rekam</button>
-            <button id="stopBtn" disabled>⏹️ Berhenti</button>
-            <p id="status">Status: belum merekam</p>
-            <audio id="player" controls></audio>
-            <script>
-                let chunks = [];
-                let recorder;
-                const startBtn = document.getElementById("startBtn");
-                const stopBtn = document.getElementById("stopBtn");
-                const status = document.getElementById("status");
-                const player = document.getElementById("player");
+    st.markdown("🎤 Klik tombol di bawah untuk merekam suara dari browser (maks 10 detik).")
+    record_html = """
+    <script>
+    let recorder, audioChunks;
+    async function record() {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        recorder = new MediaRecorder(stream);
+        audioChunks = [];
+        recorder.ondataavailable = e => audioChunks.push(e.data);
+        recorder.onstop = e => {
+            const blob = new Blob(audioChunks, { type: 'audio/wav' });
+            const reader = new FileReader();
+            reader.readAsDataURL(blob);
+            reader.onloadend = () => {
+                const base64data = reader.result.split(',')[1];
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'audio_data';
+                input.value = base64data;
+                document.body.appendChild(input);
+                window.parent.postMessage(base64data, "*");
+            };
+        };
+        recorder.start();
+        setTimeout(() => recorder.stop(), 10000); // otomatis berhenti 10 detik
+    }
+    function stop() { recorder.stop(); }
+    </script>
+    <button onclick="record()">🎙️ Mulai Rekam</button>
+    <button onclick="stop()">🛑 Selesai</button>
+    """
+    st.markdown(record_html, unsafe_allow_html=True)
 
-                startBtn.onclick = async () => {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    recorder = new MediaRecorder(stream);
-                    chunks = [];
-                    recorder.ondataavailable = e => chunks.push(e.data);
-                    recorder.onstop = e => {
-                        const blob = new Blob(chunks, { type: 'audio/wav' });
-                        const url = URL.createObjectURL(blob);
-                        player.src = url;
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = 'rekaman.wav';
-                        a.textContent = '💾 Unduh Rekaman';
-                        document.body.appendChild(a);
-                    };
-                    recorder.start();
-                    startBtn.disabled = true;
-                    stopBtn.disabled = false;
-                    status.textContent = "Status: merekam...";
-                };
-                stopBtn.onclick = () => {
-                    recorder.stop();
-                    startBtn.disabled = false;
-                    stopBtn.disabled = true;
-                    status.textContent = "Status: rekaman selesai.";
-                };
-            </script>
-        </div>
-    """, height=300)
-
-    st.info("Setelah rekam, unduh file `rekaman.wav` lalu unggah di mode *Upload File*.")
+    audio_base64 = st.text_area("📦 Tempel hasil Base64 di sini (otomatis atau manual):")
+    if audio_base64:
+        audio_bytes = base64.b64decode(audio_base64)
+        temp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+        with open(temp_path, "wb") as f:
+            f.write(audio_bytes)
+        audio_data = temp_path
+        st.audio(temp_path, format="audio/wav")
 
 # ============================================================
 # Proses Prediksi
@@ -206,7 +197,7 @@ if audio_data:
         }).sort_values("Probabilitas (%)", ascending=False)
 
         st.markdown("#### 📊 Probabilitas Tiap Kelas")
-        st.dataframe(prob_df, use_container_width=True)
+        st.table(prob_df)
 
         # 🎵 Visualisasi Audio
         st.subheader("📈 Waveform Audio")
@@ -232,7 +223,6 @@ if audio_data:
         plt.ylim(0, 100)
         st.pyplot(plt)
 
-    # Hapus file sementara
     if os.path.exists(audio_data):
         os.remove(audio_data)
 else:
