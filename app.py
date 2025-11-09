@@ -114,6 +114,29 @@ threshold = st.sidebar.slider(
     help="Semakin tinggi nilainya, semakin ketat sistem dalam mengenali suara.",
 )
 
+# ============================================================
+# Upload File Audio
+# ============================================================
+uploaded_file = st.file_uploader("🎵 Upload file audio (.wav)", type=["wav"])
+
+if uploaded_file is not None:
+    temp_path = "temp_audio.wav"
+    with open(temp_path, "wb") as f:
+        f.write(uploaded_file.read())
+
+    st.audio(temp_path, format="audio/wav")
+
+    with st.spinner("⏳ Memproses audio..."):
+        speaker, status, prob, probs, labels, y, sr = predict_audio_array(librosa.load(temp_path)[0], 22050, threshold)
+
+    os.remove(temp_path)
+else:
+    y = None
+    sr = 22050
+
+# ============================================================
+# Rekam Suara Langsung (WebRTC)
+# ============================================================
 st.markdown("### 🎤 Rekam Suara Langsung")
 webrtc_ctx = webrtc_streamer(
     key="audio-predictor",
@@ -127,60 +150,65 @@ webrtc_ctx = webrtc_streamer(
 if webrtc_ctx.audio_receiver:
     audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
     if audio_frames:
-        # gabungkan semua frame
         audio_data = np.concatenate([f.to_ndarray() for f in audio_frames], axis=0)
         if audio_data.ndim > 1:
             audio_data = np.mean(audio_data, axis=1)
         y = audio_data.astype(np.float32)
         sr = 44100
 
-        speaker, status, prob, probs, labels, y_proc, sr_proc = predict_audio_array(y, sr, threshold)
+# ============================================================
+# Tampilkan Hasil Prediksi
+# ============================================================
+if y is not None:
+    speaker, status, prob, probs, labels, y_proc, sr_proc = predict_audio_array(y, sr, threshold)
 
-        st.markdown("---")
-        st.subheader("🎯 Hasil Prediksi")
+    st.markdown("---")
+    st.subheader("🎯 Hasil Prediksi")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Speaker", speaker)
-        with col2:
-            st.metric("Status Suara", status)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Speaker", speaker)
+    with col2:
+        st.metric("Status Suara", status)
 
-        st.metric("Confidence (%)", f"{prob*100:.2f}%")
+    st.metric("Confidence (%)", f"{prob*100:.2f}%")
 
-        # ============================= Tabel Probabilitas
-        prob_df = pd.DataFrame({
-            "Kelas": labels,
-            "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
-        }).sort_values("Probabilitas (%)", ascending=False)
+    # ============================= Tabel Probabilitas
+    prob_df = pd.DataFrame({
+        "Kelas": labels,
+        "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
+    }).sort_values("Probabilitas (%)", ascending=False)
 
-        st.markdown("#### 📊 Probabilitas Tiap Kelas")
-        st.table(
-            prob_df.style.set_table_styles([
-                {"selector": "th", "props": [("text-align", "center"), ("font-weight", "bold")]},
-                {"selector": "td", "props": [("text-align", "center")]}
-            ])
-        )
+    st.markdown("#### 📊 Probabilitas Tiap Kelas")
+    st.table(
+        prob_df.style.set_table_styles([
+            {"selector": "th", "props": [("text-align", "center"), ("font-weight", "bold")]},
+            {"selector": "td", "props": [("text-align", "center")]}
+        ])
+    )
 
-        # ============================= Visualisasi Audio
-        st.subheader("📈 Waveform Audio")
-        fig, ax = plt.subplots(figsize=(8, 3))
-        librosa.display.waveshow(y, sr=sr, ax=ax)
-        ax.set_title("Waveform Audio", fontsize=12)
-        st.pyplot(fig)
+    # ============================= Visualisasi Audio
+    st.subheader("📈 Waveform Audio")
+    fig, ax = plt.subplots(figsize=(8, 3))
+    librosa.display.waveshow(y, sr=sr, ax=ax)
+    ax.set_title("Waveform Audio", fontsize=12)
+    st.pyplot(fig)
 
-        st.subheader("🎛️ Mel Spectrogram")
-        S = librosa.feature.melspectrogram(y=y, sr=sr)
-        S_dB = librosa.power_to_db(S, ref=np.max)
-        fig, ax = plt.subplots(figsize=(10, 4))
-        img = librosa.display.specshow(S_dB, sr=sr, x_axis='time', y_axis='mel', ax=ax)
-        fig.colorbar(img, ax=ax, format='%+2.0f dB')
-        ax.set_title("Mel Spectrogram", fontsize=12)
-        st.pyplot(fig)
+    st.subheader("🎛️ Mel Spectrogram")
+    S = librosa.feature.melspectrogram(y=y, sr=sr)
+    S_dB = librosa.power_to_db(S, ref=np.max)
+    fig, ax = plt.subplots(figsize=(10, 4))
+    img = librosa.display.specshow(S_dB, sr=sr, x_axis='time', y_axis='mel', ax=ax)
+    fig.colorbar(img, ax=ax, format='%+2.0f dB')
+    ax.set_title("Mel Spectrogram", fontsize=12)
+    st.pyplot(fig)
 
-        st.subheader("📉 Distribusi Probabilitas")
-        plt.figure(figsize=(6, 4))
-        sns.barplot(x="Kelas", y="Probabilitas (%)", data=prob_df)
-        plt.xticks(rotation=45)
-        plt.ylim(0, 100)
-        plt.tight_layout()
-        st.pyplot(plt)
+    st.subheader("📉 Distribusi Probabilitas")
+    plt.figure(figsize=(6, 4))
+    sns.barplot(x="Kelas", y="Probabilitas (%)", data=prob_df)
+    plt.xticks(rotation=45)
+    plt.ylim(0, 100)
+    plt.tight_layout()
+    st.pyplot(plt)
+else:
+    st.info("📂 Silakan upload file audio atau rekam suara terlebih dahulu.")
