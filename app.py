@@ -1,6 +1,6 @@
-# =========================================
-# APP STREAMLIT: Prediksi Suara Buka/Tutup + Speaker (Fix Bias & Agregasi)
-# =========================================
+# ============================================================
+# 🎧 STREAMLIT APP — Prediksi Speaker Buka/Tutup (Nadia & Vanisa Only)
+# ============================================================
 
 import streamlit as st
 import numpy as np
@@ -12,34 +12,29 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# =========================================
-# Konfigurasi Tampilan Streamlit
-# =========================================
+# ============================================================
+# Konfigurasi Streamlit
+# ============================================================
 st.set_page_config(
-    page_title="Prediksi Suara Buka/Tutup & Speaker",
+    page_title="Prediksi Suara Buka/Tutup",
     page_icon="🎵",
     layout="centered",
-    initial_sidebar_state="expanded"
 )
 
-# =========================================
-# Load model dan scaler
-# =========================================
+# ============================================================
+# Load model & scaler
+# ============================================================
 @st.cache_resource
 def load_model_scaler():
-    try:
-        model = joblib.load("best_audio_model.pkl")
-        scaler = joblib.load("scaler_audio.pkl")
-        return model, scaler
-    except Exception as e:
-        st.error(f"❌ Gagal memuat model atau scaler: {e}")
-        st.stop()
+    model = joblib.load("best_audio_model.pkl")
+    scaler = joblib.load("scaler_audio.pkl")
+    return model, scaler
 
 model, scaler = load_model_scaler()
 
-# =========================================
-# FUNGSI EKSTRAKSI FITUR (identik dengan training)
-# =========================================
+# ============================================================
+# Fungsi Ekstraksi Fitur
+# ============================================================
 def zero_crossing_rate(y):
     return np.mean(librosa.feature.zero_crossing_rate(y=y).T, axis=0)[0]
 
@@ -72,9 +67,9 @@ def extract_features(file_path):
     features.extend(mfccs.tolist())
     return np.array(features).reshape(1, -1), y, sr
 
-# =========================================
-# FUNGSI PREDIKSI (versi agregasi speaker)
-# =========================================
+# ============================================================
+# Fungsi Prediksi (Whitelist: hanya Nadia & Vanisa)
+# ============================================================
 def predict_audio(file_path, threshold=0.6, force_accept=False):
     features, y, sr = extract_features(file_path)
     features_scaled = scaler.transform(features)
@@ -82,25 +77,45 @@ def predict_audio(file_path, threshold=0.6, force_accept=False):
     probs = model.predict_proba(features_scaled)[0]
     class_labels = model.classes_
 
-    # ----- Agregasi probabilitas per speaker -----
+    # ✅ Daftar speaker yang diizinkan
+    allowed_speakers = ["nadia", "vanisa"]
+
+    # Agregasi probabilitas per speaker
     speaker_probs = {}
     for label, prob in zip(class_labels, probs):
-        spk = label.split("_")[0].lower()
+        spk = label.split("_")[0].strip().lower()
         speaker_probs.setdefault(spk, []).append(prob)
 
     speaker_avg = {spk: np.mean(vals) for spk, vals in speaker_probs.items()}
     speaker_sorted = sorted(speaker_avg.items(), key=lambda x: x[1], reverse=True)
+
+    if not speaker_sorted:
+        return "Unknown", "Tidak diketahui", 0.0, probs, features_scaled, y, sr, {}
+
     top_speaker, top_speaker_prob = speaker_sorted[0]
 
-    # Ambil status (buka/tutup) dengan probabilitas tertinggi untuk speaker tsb
-    speaker_related = [(lbl, pr) for lbl, pr in zip(class_labels, probs) if lbl.startswith(top_speaker)]
-    best_label, best_prob = max(speaker_related, key=lambda x: x[1])
+    # Ambil semua label milik speaker tsb
+    speaker_related = [
+        (lbl, pr)
+        for lbl, pr in zip(class_labels, probs)
+        if lbl.lower().startswith(top_speaker)
+    ]
 
-    # Parse label
-    speaker_name, status = best_label.split("_", 1)
-    status = status.capitalize()
+    if not speaker_related:
+        best_label, best_prob = "unknown_tidakdiketahui", 0.0
+        speaker_name, status = "Unknown", "Tidak diketahui"
+    else:
+        best_label, best_prob = max(speaker_related, key=lambda x: x[1])
+        speaker_name, status = best_label.split("_", 1)
+        status = status.capitalize()
 
-    # Threshold handling
+    # 🔒 Hanya terima speaker yang diizinkan
+    if speaker_name.lower() not in allowed_speakers:
+        speaker_name = "Unknown"
+        status = "Tidak diketahui"
+        top_speaker_prob = 0.0
+
+    # 🔻 Threshold check
     if top_speaker_prob < threshold and not force_accept:
         speaker_name = "Unknown"
         status = "Tidak diketahui"
@@ -113,115 +128,83 @@ def predict_audio(file_path, threshold=0.6, force_accept=False):
         "best_prob": best_prob
     }
 
-    return speaker_name.capitalize(), status, top_speaker_prob, probs, features_scaled, y, sr, debug
+    return (
+        speaker_name.capitalize(),
+        status,
+        top_speaker_prob,
+        probs,
+        features_scaled,
+        y,
+        sr,
+        debug
+    )
 
+# ============================================================
+# Tampilan UI Streamlit
+# ============================================================
+st.title("🎧 Prediksi Suara Buka/Tutup (Nadia & Vanisa Only)")
+st.write("Upload file audio `.wav` untuk mendeteksi siapa speakernya dan status suaranya (Buka/Tutup).")
 
-# =========================================
-# UI: Sidebar
-# =========================================
-st.sidebar.header("⚙️ Pengaturan")
-threshold = st.sidebar.slider("Confidence threshold", 0.0, 1.0, 0.6, 0.01)
-force_accept = st.sidebar.checkbox("Force accept prediction even if < threshold", False)
-
-# =========================================
-# UI: Header
-# =========================================
-st.markdown(
-    """
-    <div style="text-align:center">
-        <h1>🎧 Prediksi Suara Buka/Tutup & Speaker</h1>
-        <p style="font-size:17px;">Upload file audio (.wav) untuk mendeteksi <b>siapa speakernya</b> dan <b>apakah suaranya Buka atau Tutup</b>.</p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-# Info model
-known_speakers = sorted(set([c.split("_")[0].capitalize() for c in model.classes_]))
-st.info(f"Derived known speakers: {', '.join(known_speakers)}")
-
-# =========================================
-# Upload File Audio
-# =========================================
-uploaded_file = st.file_uploader("Upload .wav", type=["wav"])
+uploaded_file = st.file_uploader("🎵 Pilih file audio", type=["wav"])
 
 if uploaded_file is not None:
     temp_path = "temp_audio.wav"
-    try:
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_file.read())
+    with open(temp_path, "wb") as f:
+        f.write(uploaded_file.read())
 
-        st.audio(temp_path, format="audio/wav")
-        st.info("⏳ Processing...")
+    st.audio(temp_path, format="audio/wav")
 
-        # Prediksi
-        speaker, status, top_prob, probs, features_scaled, y, sr, debug = predict_audio(
-            temp_path, threshold, force_accept
-        )
+    with st.spinner("⏳ Sedang memproses audio..."):
+        speaker, status, prob, probs, features_scaled, y, sr, debug = predict_audio(temp_path)
 
-        # =========================================
-        # Hasil Prediksi
-        # =========================================
-        st.markdown("### 🎯 Hasil Prediksi")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Speaker", speaker)
-        with col2:
-            st.metric("Status", status)
-        st.metric("Confidence (%)", f"{top_prob*100:.2f}%")
+    st.subheader("🎯 Hasil Prediksi")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Speaker", speaker)
+    with col2:
+        st.metric("Status", status)
+    st.metric("Confidence", f"{prob*100:.2f}%")
 
-        # =========================================
-        # Probabilitas Kelas
-        # =========================================
-        prob_df = pd.DataFrame({
-            "Kelas": model.classes_,
-            "Prob (%)": [round(p * 100, 2) for p in probs]
-        }).sort_values("Prob (%)", ascending=False)
-        st.markdown("#### 📊 Probabilitas tiap kelas (desc):")
-        st.dataframe(prob_df, use_container_width=True)
+    # Probabilitas per kelas
+    prob_df = pd.DataFrame({
+        "Kelas": model.classes_,
+        "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
+    }).sort_values("Probabilitas (%)", ascending=False)
 
-        # =========================================
-        # Agregasi Probabilitas per Speaker
-        # =========================================
-        st.markdown("#### 🧩 Probabilitas rata-rata per speaker:")
-        speaker_df = pd.DataFrame(debug["speaker_sorted"], columns=["Speaker", "Prob (%)"])
-        speaker_df["Prob (%)"] = speaker_df["Prob (%)"] * 100
-        st.dataframe(speaker_df, use_container_width=True)
+    st.write("### 🔍 Distribusi Probabilitas")
+    st.dataframe(prob_df, use_container_width=True)
 
-        # Bar chart per speaker
-        plt.figure(figsize=(6, 3))
-        sns.barplot(x="Speaker", y="Prob (%)", data=speaker_df)
-        plt.ylim(0, 100)
-        plt.title("Distribusi Probabilitas per Speaker")
-        st.pyplot(plt)
+    # Waveform
+    st.subheader("📈 Waveform Audio")
+    fig, ax = plt.subplots(figsize=(8, 3))
+    librosa.display.waveshow(y, sr=sr, ax=ax)
+    ax.set_title("Waveform Audio")
+    ax.set_xlabel("Waktu (detik)")
+    ax.set_ylabel("Amplitudo")
+    st.pyplot(fig)
 
-        # =========================================
-        # Visualisasi Audio
-        # =========================================
-        st.markdown("### 🎵 Visualisasi Audio")
-        fig, ax = plt.subplots(figsize=(8, 3))
-        librosa.display.waveshow(y, sr=sr, ax=ax)
-        ax.set_title("Waveform Audio")
-        st.pyplot(fig)
+    # Mel Spectrogram
+    st.subheader("🎛️ Mel Spectrogram")
+    S = librosa.feature.melspectrogram(y=y, sr=sr)
+    S_dB = librosa.power_to_db(S, ref=np.max)
+    fig, ax = plt.subplots(figsize=(10, 4))
+    img = librosa.display.specshow(S_dB, sr=sr, x_axis='time', y_axis='mel', ax=ax)
+    fig.colorbar(img, ax=ax, format='%+2.0f dB')
+    ax.set_title("Mel Spectrogram")
+    st.pyplot(fig)
 
-        S = librosa.feature.melspectrogram(y=y, sr=sr)
-        S_dB = librosa.power_to_db(S, ref=np.max)
-        fig, ax = plt.subplots(figsize=(10, 4))
-        img = librosa.display.specshow(S_dB, sr=sr, x_axis='time', y_axis='mel', ax=ax)
-        fig.colorbar(img, ax=ax, format='%+2.0f dB')
-        ax.set_title("Mel Spectrogram")
-        st.pyplot(fig)
+    # Barplot Probabilitas
+    st.subheader("📊 Distribusi Probabilitas Kelas")
+    plt.figure(figsize=(6, 4))
+    sns.barplot(x="Kelas", y="Probabilitas (%)", data=prob_df)
+    plt.xticks(rotation=45)
+    plt.ylim(0, 100)
+    plt.tight_layout()
+    st.pyplot(plt)
 
-        # =========================================
-        # Debug Info
-        # =========================================
-        with st.expander("🧠 Debug Info"):
-            st.write("Fitur hasil ekstraksi (18 dimensi):")
-            st.dataframe(pd.DataFrame(features_scaled, columns=[f"feat_{i+1}" for i in range(features_scaled.shape[1])]))
-            st.write("Rincian speaker prob:", debug["speaker_avg"])
+    with st.expander("🧠 Debug Info"):
+        st.write(debug)
 
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+    os.remove(temp_path)
 else:
-    st.warning("📂 Silakan upload file audio untuk melakukan prediksi.")
+    st.info("📂 Silakan upload file audio untuk memulai prediksi.")
