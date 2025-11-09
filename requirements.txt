@@ -7,5 +7,6 @@ matplotlib>=3.5,<3.8
 scipy
 soundfile
 setuptools
-scikit-learn
 seaborn
+streamlit-webrtc
+av
