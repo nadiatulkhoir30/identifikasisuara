@@ -1,6 +1,5 @@
 # ============================================================
 # 🎧 STREAMLIT APP — Prediksi Suara Buka/Tutup (Nadia & Vanisa)
-# Dengan fitur: Upload + Rekam Suara Langsung 🎙️
 # ============================================================
 
 import streamlit as st
@@ -28,8 +27,7 @@ st.set_page_config(
 st.title("🎧 Prediksi Suara Buka/Tutup")
 st.markdown(
     "Aplikasi ini memprediksi siapa yang berbicara dan apakah suaranya **Buka** atau **Tutup**. "
-    "Kamu bisa **upload file audio** atau **rekam suara langsung dari mic** 🎙️. "
-    "Atur ambang batas (threshold) dan kunci hanya untuk Nadia & Vanisa sesuai kebutuhan."
+    "Kamu bisa **upload file audio**, **rekam suara langsung**, atau **gunakan contoh bawaan** 🎙️."
 )
 
 # ============================================================
@@ -94,10 +92,10 @@ def predict_speaker(file_path, threshold=0.7, lock_speakers=True):
     return speaker_name.capitalize(), status, max_prob, probs, labels, y, sr, None
 
 # ============================================================
-# UI: Upload atau Rekam
+# Pilihan Mode Input
 # ============================================================
 st.markdown("## 🗂️ Pilih Sumber Suara")
-mode = st.radio("Pilih metode input:", ["🎙️ Rekam Langsung", "📁 Upload File (.wav)"])
+mode = st.radio("Pilih metode input:", ["📁 Upload File (.wav)", "🎙️ Rekam Langsung", "🎵 Gunakan File Contoh"])
 
 col1, col2 = st.columns(2)
 threshold = col1.slider("🎚️ Threshold Kepercayaan", 0.0, 1.0, 0.7, 0.01)
@@ -105,26 +103,31 @@ lock_speakers = col2.checkbox("🔒 Kunci hanya untuk Nadia & Vanisa", value=Tru
 
 audio_path = None
 
+# ============================================================
+# Mode 1: Upload File
+# ============================================================
 if mode == "📁 Upload File (.wav)":
     uploaded_file = st.file_uploader("🎵 Upload file audio", type=["wav"])
     if uploaded_file:
-        audio_path = "temp_audio.wav"
+        audio_path = "temp_uploaded.wav"
         with open(audio_path, "wb") as f:
             f.write(uploaded_file.read())
         st.audio(audio_path, format="audio/wav")
+        st.success("✅ File berhasil diupload!")
 
-else:
+# ============================================================
+# Mode 2: Rekam Langsung
+# ============================================================
+elif mode == "🎙️ Rekam Langsung":
     st.info("Klik **Start** untuk mulai merekam suara kamu 🎙️ (minimal 2 detik).")
-    
+
     class AudioProcessor(AudioProcessorBase):
         def __init__(self):
             self.frames = []
-
         def recv_audio_frame(self, frame: av.AudioFrame):
             audio = frame.to_ndarray()
             self.frames.append(audio)
             return frame
-
         def get_audio(self):
             if not self.frames:
                 return None
@@ -149,9 +152,26 @@ else:
                 st.audio(audio_path, format="audio/wav")
 
 # ============================================================
+# Mode 3: File Contoh
+# ============================================================
+elif mode == "🎵 Gunakan File Contoh":
+    sample_dir = "clean_audio"
+    if os.path.exists(sample_dir):
+        speaker_opt = st.selectbox("Pilih contoh suara:", [
+            "Nadia_Buka/1.wav",
+            "Nadia_Tutup/1.wav",
+            "Vanisa_Buka/1.wav",
+            "Vanisa_Tutup/1.wav",
+        ])
+        audio_path = os.path.join(sample_dir, speaker_opt)
+        st.audio(audio_path, format="audio/wav")
+    else:
+        st.error("❌ Folder `clean_audio` tidak ditemukan. Pastikan contoh audio tersedia.")
+
+# ============================================================
 # Prediksi
 # ============================================================
-if audio_path is not None:
+if audio_path is not None and os.path.exists(audio_path):
     with st.spinner("⏳ Menganalisis audio..."):
         speaker, status, prob, probs, labels, y, sr, err = predict_speaker(
             audio_path, threshold=threshold, lock_speakers=lock_speakers
@@ -167,6 +187,7 @@ if audio_path is not None:
         col2.metric("Status", status)
         st.metric("Confidence", f"{prob*100:.2f}%")
 
+        # Probabilitas
         prob_df = pd.DataFrame({
             "Kelas": labels,
             "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
@@ -175,6 +196,7 @@ if audio_path is not None:
         st.markdown("#### 📊 Probabilitas Tiap Kelas")
         st.dataframe(prob_df, use_container_width=True)
 
+        # Visualisasi
         st.subheader("📈 Waveform Audio")
         fig, ax = plt.subplots(figsize=(8, 3))
         librosa.display.waveshow(y, sr=sr, ax=ax)
@@ -197,6 +219,5 @@ if audio_path is not None:
         plt.ylim(0, 100)
         st.pyplot(plt)
 
-    os.remove(audio_path)
 else:
-    st.info("📂 Silakan upload atau rekam file audio terlebih dahulu.")
+    st.info("📂 Silakan pilih atau rekam file audio terlebih dahulu.")
