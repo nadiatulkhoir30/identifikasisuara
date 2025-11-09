@@ -2,12 +2,11 @@
 # 🔹 IMPORT LIBRARY
 # ==================================================
 import streamlit as st
-import os
 import numpy as np
 import librosa
 import joblib
 import tempfile
-from scipy.io.wavfile import write
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, ClientSettings
 
 # ==================================================
 # 🔹 FUNGSIONAL EKSTRAKSI FITUR AUDIO
@@ -55,15 +54,12 @@ scaler = joblib.load("scaler_audio.pkl")
 # ==================================================
 def predict_speaker(file_path, threshold=0.7):
     features = extract_features(file_path)
-    
     if features.shape[1] != scaler.n_features_in_:
         return f"❌ Jumlah fitur {features.shape[1]} tidak cocok dengan scaler ({scaler.n_features_in_})"
-    
     features_scaled = scaler.transform(features)
     probs = model.predict_proba(features_scaled)[0]
     max_prob = np.max(probs)
     pred_label = model.classes_[np.argmax(probs)]
-    
     if max_prob < threshold:
         return f"❌ Speaker tidak dikenal (Confidence tertinggi: {max_prob:.2f})"
     else:
@@ -73,10 +69,11 @@ def predict_speaker(file_path, threshold=0.7):
 # 🔹 STREAMLIT APP
 # ==================================================
 st.title("🔊 Speaker Recognition")
-
 st.markdown("Upload file audio atau rekam langsung menggunakan mikrofon.")
 
+# ----------------------
 # Upload audio
+# ----------------------
 uploaded_file = st.file_uploader("Pilih file audio (wav)", type=["wav"])
 if uploaded_file is not None:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
@@ -85,17 +82,25 @@ if uploaded_file is not None:
     result = predict_speaker(file_path)
     st.success(result)
 
-# Rekam audio
-st.markdown("**Atau rekam audio langsung:**")
-duration = st.slider("Durasi rekaman (detik)", 1, 10, 3)
-if st.button("Mulai Rekam"):
-    st.info("Rekaman sedang berlangsung...")
-    import sounddevice as sd
-    fs = 22050
-    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1)
-    sd.wait()
-    # simpan sementara
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    write(temp_file.name, fs, recording)
-    result = predict_speaker(temp_file.name)
-    st.success(result)
+# ----------------------
+# Rekam audio via browser
+# ----------------------
+st.markdown("**Atau rekam audio langsung di browser:**")
+webrtc_ctx = webrtc_streamer(
+    key="speaker-recorder",
+    mode=WebRtcMode.SENDONLY,
+    client_settings=ClientSettings(
+        media_stream_constraints={"audio": True, "video": False}
+    ),
+)
+
+if webrtc_ctx.audio_receiver:
+    audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
+    if audio_frames:
+        # Gabungkan semua frame
+        audio_data = np.hstack([f.to_ndarray()[:, 0] for f in audio_frames])
+        # Simpan sementara
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        librosa.output.write_wav(temp_file.name, audio_data.astype(np.float32), sr=22050)
+        result = predict_speaker(temp_file.name)
+        st.success(result)
