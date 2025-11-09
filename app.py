@@ -93,7 +93,8 @@ def predict_audio(file_path, threshold=0.6):
 st.title("🎧 Prediksi Suara Buka/Tutup (Nadia & Vanisa Only)")
 st.markdown("""
 Aplikasi ini hanya menerima suara dari <b>Nadia</b> dan <b>Vanisa</b>.
-Suara selain keduanya otomatis menjadi <b>Unknown</b>.
+Suara selain keduanya otomatis menjadi <b>Unknown</b>.<br>
+Langkah: Rekam suara online / aplikasi PC → download .wav → upload di bawah.
 """, unsafe_allow_html=True)
 
 st.sidebar.header("⚙️ Pengaturan Model")
@@ -157,4 +158,4 @@ if uploaded_file is not None:
 
     os.remove(temp_path)
 else:
-    st.info("📂 Silakan upload file audio terlebih dahulu.")
+    st.info("📂 Silakan upload file audio (.wav) setelah merekam suara.")
