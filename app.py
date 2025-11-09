@@ -1,12 +1,15 @@
+# ==================================================
+# 🔹 IMPORT LIBRARY
+# ==================================================
 import streamlit as st
 import numpy as np
 import librosa
 import joblib
-import soundfile as sf
 import tempfile
+import os
 
 # ==================================================
-# 🔹 Ekstraksi Fitur Audio
+# 🔹 FUNGSI EKSTRAKSI FITUR AUDIO
 # ==================================================
 def zero_crossing_rate(y):
     return np.mean(librosa.feature.zero_crossing_rate(y=y).T, axis=0)[0]
@@ -28,7 +31,8 @@ def mfcc_features(y, sr, n_mfcc=13):
     return np.mean(mfccs, axis=1)
 
 def extract_features(file_path):
-    y, sr = librosa.load(file_path, sr=22050, mono=True)
+    """Ekstraksi fitur untuk satu file audio (tanpa resampling)"""
+    y, sr = librosa.load(file_path, sr=None, mono=True)  # ⚠️ jangan ubah sr (biar sama dgn .py)
     features = [
         zero_crossing_rate(y),
         rms(y),
@@ -41,7 +45,7 @@ def extract_features(file_path):
     return np.array(features).reshape(1, -1)
 
 # ==================================================
-# 🔹 Load Model & Scaler
+# 🔹 LOAD MODEL & SCALER
 # ==================================================
 @st.cache_resource
 def load_model_and_scaler():
@@ -52,45 +56,58 @@ def load_model_and_scaler():
 model, scaler = load_model_and_scaler()
 
 # ==================================================
-# 🔹 Prediksi Speaker
+# 🔹 PREDIKSI SPEAKER
 # ==================================================
 def predict_speaker(file_path, threshold=0.7):
     features = extract_features(file_path)
+
     if features.shape[1] != scaler.n_features_in_:
         st.error(f"Jumlah fitur {features.shape[1]} tidak cocok dengan scaler ({scaler.n_features_in_})")
         return None, None
+
     features_scaled = scaler.transform(features)
     probs = model.predict_proba(features_scaled)[0]
     max_prob = np.max(probs)
     pred_label = model.classes_[np.argmax(probs)]
+
     if max_prob < threshold:
         return "Tidak dikenal", max_prob
     else:
         return pred_label, max_prob
 
 # ==================================================
-# 🔹 Streamlit UI
+# 🔹 STREAMLIT APP
 # ==================================================
 st.title("🎙️ Voice Recognition App")
-st.write("Unggah file audio untuk mendeteksi speaker.")
+st.write("Unggah file audio untuk mendeteksi siapa speaker-nya.")
 
 uploaded_file = st.file_uploader("Pilih file audio (.wav)", type=["wav", "mp3", "ogg"])
+
 threshold = st.slider("Threshold Kepercayaan", 0.0, 1.0, 0.7, 0.05)
 
 if uploaded_file is not None:
-    # Simpan ulang audio upload dengan soundfile (agar format sama)
+    # Simpan file upload langsung (tanpa ubah format)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-        data, samplerate = sf.read(uploaded_file)
-        sf.write(tmp_file.name, data, samplerate)
+        tmp_file.write(uploaded_file.read())
         temp_path = tmp_file.name
 
+    # Tampilkan audio
     st.audio(uploaded_file, format="audio/wav")
 
+    # Prediksi
     if st.button("🔍 Prediksi Speaker"):
         with st.spinner("Menganalisis audio..."):
             pred_label, confidence = predict_speaker(temp_path, threshold)
 
-        if pred_label == "Tidak dikenal":
+        if pred_label is None:
+            st.error("Gagal memproses file.")
+        elif pred_label == "Tidak dikenal":
             st.warning(f"❌ Speaker tidak dikenal (confidence: {confidence:.2f})")
         else:
             st.success(f"✅ Prediksi Speaker: **{pred_label}** (confidence: {confidence:.2f})")
+
+        # Hapus file sementara
+        os.remove(temp_path)
+
+st.markdown("---")
+st.caption("Developed with ❤️ using Streamlit & Librosa")
