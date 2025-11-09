@@ -1,64 +1,106 @@
+# ==================================================
+# 🎙️ APLIKASI IDENTIFIKASI SUARA TERBATAS (2 SPEAKER)
+# ==================================================
 import streamlit as st
 import numpy as np
-import pandas as pd
-import joblib
 import librosa
+import joblib
 import os
+import tempfile
 
 # ==================================================
-# 🔹 1. LOAD MODEL DAN SCALER
+# 🔹 FUNGSI EKSTRAKSI FITUR (HARUS SESUAI TRAINING)
+# ==================================================
+def extract_features(file_path):
+    y, sr = librosa.load(file_path, sr=22050)
+
+    # Hitung fitur utama
+    zcr = np.mean(librosa.feature.zero_crossing_rate(y=y))
+    rms = np.sqrt(np.mean(y ** 2))
+    sc = np.mean(librosa.feature.spectral_centroid(y=y, sr=sr))
+    sb = np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr))
+    scon = np.mean(librosa.feature.spectral_contrast(y=y, sr=sr))
+    mfccs = np.mean(librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13), axis=1)
+
+    # Gabungkan ke satu vektor fitur
+    features = np.hstack([zcr, rms, sc, sb, scon, mfccs])
+    return features.reshape(1, -1)
+
+# ==================================================
+# 🔹 LOAD MODEL & SCALER
 # ==================================================
 @st.cache_resource
-def load_model_scaler():
+def load_model_and_scaler():
     model = joblib.load("best_audio_model.pkl")
     scaler = joblib.load("scaler_audio.pkl")
     return model, scaler
 
-model, scaler = load_model_scaler()
+model, scaler = load_model_and_scaler()
 
 # ==================================================
-# 🔹 2. FUNGSI EKSTRAKSI FITUR DARI AUDIO
+# 🔹 SPEAKER YANG DIIZINKAN
 # ==================================================
-def extract_features(file_path):
-    y, sr = librosa.load(file_path, sr=None)
-
-    # Ekstraksi fitur dasar (bisa disesuaikan dengan fitur pelatihanmu)
-    chroma_stft = np.mean(librosa.feature.chroma_stft(y=y, sr=sr))
-    rms = np.mean(librosa.feature.rms(y=y))
-    spec_cent = np.mean(librosa.feature.spectral_centroid(y=y, sr=sr))
-    spec_bw = np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr))
-    rolloff = np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr))
-    zcr = np.mean(librosa.feature.zero_crossing_rate(y))
-    mfcc = np.mean(librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13).T, axis=0)
-
-    features = np.hstack([chroma_stft, rms, spec_cent, spec_bw, rolloff, zcr, mfcc])
-    return features
+allowed_speakers = ["Nadia", "Vanisa"]  # ubah sesuai nama folder training kamu
+confidence_threshold = 0.75  # minimal confidence agar diakui
 
 # ==================================================
-# 🔹 3. UI STREAMLIT
+# 🔹 TAMPILAN APLIKASI
 # ==================================================
-st.title("🎵 Prediksi Kelas Audio")
-st.write("Unggah file audio (format: .wav, .mp3, .m4a) untuk diprediksi menggunakan model yang sudah dilatih.")
+st.title("🎙️ Aplikasi Identifikasi Suara (2 Speaker Tertentu)")
+st.write("Unggah file audio (.wav) untuk mengenali apakah suara termasuk salah satu speaker yang dikenal.")
 
-uploaded_file = st.file_uploader("Pilih file audio", type=["wav", "mp3", "m4a"])
+# Upload file
+uploaded_file = st.file_uploader("📂 Unggah file audio (.wav)", type=["wav"])
 
 if uploaded_file is not None:
-    file_path = f"temp_{uploaded_file.name}"
-    with open(file_path, "wb") as f:
-        f.write(uploaded_file.read())
+    # Simpan file sementara
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+        tmp_file.write(uploaded_file.read())
+        file_path = tmp_file.name
 
-    st.audio(file_path)
+    st.audio(uploaded_file, format='audio/wav')
+    st.write(f"📁 File berhasil diunggah: `{uploaded_file.name}`")
 
-    # Ekstraksi fitur
-    features = extract_features(file_path)
-    X_new = np.array([features])
+    # ==================================================
+    # 🔹 EKSTRAKSI FITUR & PREDIKSI
+    # ==================================================
+    try:
+        with st.spinner("🔍 Menganalisis suara..."):
+            features = extract_features(file_path)
+            X_new_scaled = scaler.transform(features)
+            probas = model.predict_proba(X_new_scaled)[0]
+            pred = model.classes_[np.argmax(probas)]
+            confidence = np.max(probas)
 
-    # Normalisasi fitur baru (pakai scaler training)
-    X_new_scaled = scaler.transform(X_new)
+        # ==================================================
+        # 🔹 LOGIKA PEMBATASAN SPEAKER
+        # ==================================================
+        recognized = False
+        for speaker in allowed_speakers:
+            if speaker.lower() in pred.lower() and confidence >= confidence_threshold:
+                st.success(f"✅ Speaker terdeteksi: **{speaker}** (Confidence: {confidence:.2f})")
+                recognized = True
+                break
 
-    # Prediksi
-    prediction = model.predict(X_new_scaled)
-    st.success(f"🎯 Prediksi kelas audio: **{prediction[0]}**")
+        if not recognized:
+            st.error(f"❌ Speaker tidak dikenal atau confidence rendah ({confidence:.2f})")
+            st.info("Hanya suara dari speaker yang telah terdaftar yang bisa dikenali.")
 
-    # Hapus file sementara
-    os.remove(file_path)
+        # ==================================================
+        # 🔹 TAMPILKAN PROBABILITAS TIAP KELAS
+        # ==================================================
+        st.write("### 🔢 Probabilitas Kelas:")
+        for label, prob in zip(model.classes_, probas):
+            st.write(f"- {label}: **{prob*100:.2f}%**")
+
+    except Exception as e:
+        st.error(f"❌ Terjadi kesalahan: {e}")
+
+else:
+    st.info("Silakan unggah file audio terlebih dahulu.")
+
+# ==================================================
+# 🔹 FOOTER
+# ==================================================
+st.markdown("---")
+st.caption("Dibuat oleh **Nadiatul Khoir** — Universitas Trunojoyo Madura 💙")
