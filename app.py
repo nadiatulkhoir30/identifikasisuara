@@ -1,3 +1,4 @@
+
 # ============================================================
 # 🎧 STREAMLIT APP — Prediksi Suara Buka/Tutup (Nadia & Vanisa Only)
 # ============================================================
@@ -11,6 +12,7 @@ import joblib
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
+from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode
 
 # ============================================================
 # Konfigurasi Streamlit
@@ -65,21 +67,28 @@ def extract_features(file_path):
     ]
     mfccs = mfcc_features(y, sr)
     features.extend(mfccs.tolist())
-    return np.array(features).reshape(1, -1), y, sr, {
-        "ZCR": zero_crossing_rate(y),
-        "RMS": rms(y),
-        "Spectral Centroid": spectral_centroid(y, sr),
-        "Spectral Bandwidth": spectral_bandwidth(y, sr),
-        "Spectral Contrast": spectral_contrast(y, sr)
-    }
+    return np.array(features).reshape(1, -1), y, sr
 
 # ============================================================
 # Prediksi (Locked Speaker: Nadia & Vanisa)
 # ============================================================
-def predict_audio(file_path, threshold=0.6):
-    features, y, sr, feat_dict = extract_features(file_path)
-    features_scaled = scaler.transform(features)
+def predict_audio(file_path=None, y=None, sr=None, threshold=0.6):
+    if file_path:
+        features, y, sr = extract_features(file_path)
+    else:
+        # Buat fitur dari waveform langsung
+        features = [
+            zero_crossing_rate(y),
+            rms(y),
+            spectral_centroid(y, sr),
+            spectral_bandwidth(y, sr),
+            spectral_contrast(y, sr),
+        ]
+        mfccs = mfcc_features(y, sr)
+        features.extend(mfccs.tolist())
+        features = np.array(features).reshape(1, -1)
 
+    features_scaled = scaler.transform(features)
     probs = model.predict_proba(features_scaled)[0]
     labels = model.classes_
 
@@ -96,13 +105,12 @@ def predict_audio(file_path, threshold=0.6):
         speaker = "Unknown"
         status = "Tidak diketahui"
 
-    return speaker.capitalize(), status, pred_prob, probs, labels, y, sr, feat_dict
+    return speaker.capitalize(), status, pred_prob, probs, labels, y, sr
 
 # ============================================================
 # UI Streamlit
 # ============================================================
-st.title("🎧 Prediksi Suara Buka/Tutup (Analisis Kelas)")
-
+st.title("🎧 Prediksi Suara Buka/Tutup")
 st.markdown(
     """
     <p style="font-size:16px;">Aplikasi ini hanya menerima suara dari <b>Nadia</b> dan <b>Vanisa</b>.<br>
@@ -111,6 +119,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# 🧩 Slider threshold
 st.sidebar.header("⚙️ Pengaturan Model")
 threshold = st.sidebar.slider(
     "Ambang Confidence (Threshold)",
@@ -121,21 +130,22 @@ threshold = st.sidebar.slider(
     help="Semakin tinggi nilainya, semakin ketat sistem dalam mengenali suara.",
 )
 
+# ============================================================
+# Upload file audio
+# ============================================================
 uploaded_file = st.file_uploader("🎵 Upload file audio (.wav)", type=["wav"])
-
-if uploaded_file is not None:
+if uploaded_file:
     temp_path = "temp_audio.wav"
     with open(temp_path, "wb") as f:
         f.write(uploaded_file.read())
 
     st.audio(temp_path, format="audio/wav")
-
     with st.spinner("⏳ Memproses audio..."):
-        speaker, status, prob, probs, labels, y, sr, feat_dict = predict_audio(temp_path, threshold)
+        speaker, status, prob, probs, labels, y, sr = predict_audio(temp_path, threshold)
 
+    # Tampilkan hasil
     st.markdown("---")
     st.subheader("🎯 Hasil Prediksi")
-
     col1, col2 = st.columns(2)
     with col1:
         st.metric("Speaker", speaker)
@@ -143,22 +153,16 @@ if uploaded_file is not None:
         st.metric("Status Suara", status)
     st.metric("Confidence (%)", f"{prob*100:.2f}%")
 
-    # =============================
-    # Tabel Probabilitas
-    # =============================
-    prob_df = pd.DataFrame({
-        "Kelas": labels,
-        "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]
-    }).sort_values("Probabilitas (%)", ascending=False)
+    # Tabel probabilitas
+    prob_df = pd.DataFrame({"Kelas": labels, "Probabilitas (%)": [round(float(p)*100, 2) for p in probs]}).sort_values("Probabilitas (%)", ascending=False)
     st.markdown("#### 📊 Probabilitas Tiap Kelas")
-    st.table(prob_df)
+    st.table(prob_df.style.set_table_styles([{"selector": "th","props":[("text-align","center"),("font-weight","bold")]},{"selector":"td","props":[("text-align","center")]}]))
 
-    # =============================
-    # Visualisasi Audio
-    # =============================
+    # Waveform & Mel Spectrogram
     st.subheader("📈 Waveform Audio")
     fig, ax = plt.subplots(figsize=(8, 3))
     librosa.display.waveshow(y, sr=sr, ax=ax)
+    ax.set_title("Waveform Audio", fontsize=12)
     st.pyplot(fig)
 
     st.subheader("🎛️ Mel Spectrogram")
@@ -166,16 +170,60 @@ if uploaded_file is not None:
     S_dB = librosa.power_to_db(S, ref=np.max)
     fig, ax = plt.subplots(figsize=(10, 4))
     img = librosa.display.specshow(S_dB, sr=sr, x_axis='time', y_axis='mel', ax=ax)
-    fig.colorbar(img, ax=ax)
+    fig.colorbar(img, ax=ax, format='%+2.0f dB')
+    ax.set_title("Mel Spectrogram", fontsize=12)
     st.pyplot(fig)
 
-    # =============================
-    # Analisis Fitur
-    # =============================
-    st.subheader("🔍 Nilai Fitur Utama Audio")
-    feat_df = pd.DataFrame.from_dict(feat_dict, orient='index', columns=['Nilai'])
-    st.table(feat_df)
+    # Distribusi probabilitas
+    st.subheader("📉 Distribusi Probabilitas")
+    plt.figure(figsize=(6, 4))
+    sns.barplot(x="Kelas", y="Probabilitas (%)", data=prob_df)
+    plt.xticks(rotation=45)
+    plt.ylim(0, 100)
+    plt.tight_layout()
+    st.pyplot(plt)
 
     os.remove(temp_path)
-else:
-    st.info("📂 Silakan upload file audio terlebih dahulu.")
+
+# ============================================================
+# Rekam suara langsung dari browser
+# ============================================================
+st.markdown("---")
+st.subheader("🎤 Rekam Suara Langsung")
+webrtc_ctx = webrtc_streamer(
+    key="audio",
+    mode=WebRtcMode.SENDONLY,
+    audio_receiver_size=256,
+    media_stream_constraints={"audio": True, "video": False},
+)
+
+if webrtc_ctx.audio_receiver:
+    import _queue
+    audio_frames = []
+    try:
+        while True:
+            frame = webrtc_ctx.audio_receiver.get_frame(block=False)
+            audio_frames.append(frame)
+    except _queue.Empty:
+        pass
+
+    if audio_frames:
+        audio_data = np.concatenate([f.to_ndarray() for f in audio_frames], axis=0)
+        if audio_data.ndim > 1:
+            audio_data = np.mean(audio_data, axis=1)
+        y = audio_data.astype(np.float32)
+        sr = 44100
+
+        with st.spinner("⏳ Memproses audio rekaman..."):
+            speaker, status, prob, probs, labels, _, _ = predict_audio(y=y, sr=sr, threshold=threshold)
+
+        # Tampilkan hasil rekaman
+        st.markdown("---")
+        st.subheader("🎯 Hasil Prediksi Rekaman")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Speaker", speaker)
+        with col2:
+            st.metric("Status Suara", status)
+        st.metric("Confidence (%)", f"{prob*100:.2f}%")
+
