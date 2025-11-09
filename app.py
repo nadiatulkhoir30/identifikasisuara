@@ -11,6 +11,8 @@ import joblib
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
+from io import BytesIO
+import soundfile as sf
 
 # ============================================================
 # Konfigurasi Streamlit
@@ -109,19 +111,82 @@ col1, col2 = st.columns(2)
 threshold = col1.slider("🎚️ Threshold Kepercayaan", 0.0, 1.0, 0.7, 0.01)
 lock_speakers = col2.checkbox("🔒 Kunci hanya untuk Nadia & Vanisa", value=True)
 
-st.markdown("### 📂 Upload File Audio")
-uploaded_file = st.file_uploader("Unggah file audio (.wav)", type=["wav"])
+st.markdown("### 🎙️ Pilih Input Suara")
+mode = st.radio("Pilih metode input:", ["Upload File", "Rekam Langsung"], horizontal=True)
 
-if uploaded_file is not None:
-    temp_path = "temp_audio.wav"
-    with open(temp_path, "wb") as f:
-        f.write(uploaded_file.read())
+audio_data = None
 
-    st.audio(temp_path, format="audio/wav")
+# ============ Mode Upload File ============
+if mode == "Upload File":
+    uploaded_file = st.file_uploader("📂 Upload file audio (.wav)", type=["wav"])
+    if uploaded_file is not None:
+        temp_path = "temp_audio.wav"
+        with open(temp_path, "wb") as f:
+            f.write(uploaded_file.read())
+        audio_data = temp_path
+        st.audio(temp_path, format="audio/wav")
 
+# ============ Mode Rekam Langsung ============
+elif mode == "Rekam Langsung":
+    st.markdown(
+        """
+        🎤 Klik tombol di bawah untuk merekam suara langsung dari browser.
+        Setelah selesai, unduh file hasil rekaman dan unggah kembali di kolom upload di atas.
+        """
+    )
+    st.components.v1.html("""
+        <div style="text-align:center">
+            <button id="startBtn">🎙️ Mulai Rekam</button>
+            <button id="stopBtn" disabled>⏹️ Berhenti</button>
+            <p id="status">Status: belum merekam</p>
+            <audio id="player" controls></audio>
+            <script>
+                let chunks = [];
+                let recorder;
+                const startBtn = document.getElementById("startBtn");
+                const stopBtn = document.getElementById("stopBtn");
+                const status = document.getElementById("status");
+                const player = document.getElementById("player");
+
+                startBtn.onclick = async () => {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    recorder = new MediaRecorder(stream);
+                    chunks = [];
+                    recorder.ondataavailable = e => chunks.push(e.data);
+                    recorder.onstop = e => {
+                        const blob = new Blob(chunks, { type: 'audio/wav' });
+                        const url = URL.createObjectURL(blob);
+                        player.src = url;
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'rekaman.wav';
+                        a.textContent = '💾 Unduh Rekaman';
+                        document.body.appendChild(a);
+                    };
+                    recorder.start();
+                    startBtn.disabled = true;
+                    stopBtn.disabled = false;
+                    status.textContent = "Status: merekam...";
+                };
+                stopBtn.onclick = () => {
+                    recorder.stop();
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    status.textContent = "Status: rekaman selesai.";
+                };
+            </script>
+        </div>
+    """, height=300)
+
+    st.info("Setelah rekam, unduh file `rekaman.wav` lalu unggah di mode *Upload File*.")
+
+# ============================================================
+# Proses Prediksi
+# ============================================================
+if audio_data:
     with st.spinner("⏳ Menganalisis audio..."):
         speaker, status, prob, probs, labels, y, sr, err = predict_speaker(
-            temp_path, threshold=threshold, lock_speakers=lock_speakers
+            audio_data, threshold=threshold, lock_speakers=lock_speakers
         )
 
     if err:
@@ -143,14 +208,13 @@ if uploaded_file is not None:
         st.markdown("#### 📊 Probabilitas Tiap Kelas")
         st.dataframe(prob_df, use_container_width=True)
 
-        # 🎵 Waveform
+        # 🎵 Visualisasi Audio
         st.subheader("📈 Waveform Audio")
         fig, ax = plt.subplots(figsize=(8, 3))
         librosa.display.waveshow(y, sr=sr, ax=ax)
         ax.set_title("Waveform Audio")
         st.pyplot(fig)
 
-        # 🎛️ Mel Spectrogram
         st.subheader("🎛️ Mel Spectrogram")
         S = librosa.feature.melspectrogram(y=y, sr=sr)
         S_dB = librosa.power_to_db(S, ref=np.max)
@@ -160,7 +224,7 @@ if uploaded_file is not None:
         ax.set_title("Mel Spectrogram")
         st.pyplot(fig)
 
-        # 📉 Barplot Probabilitas
+        # 📉 Barplot
         st.subheader("📉 Distribusi Probabilitas")
         plt.figure(figsize=(6, 4))
         sns.barplot(x="Kelas", y="Probabilitas (%)", data=prob_df)
@@ -168,10 +232,8 @@ if uploaded_file is not None:
         plt.ylim(0, 100)
         st.pyplot(plt)
 
-    # tombol reset
-    if st.button("🔁 Unggah File Baru"):
-        st.experimental_rerun()
-
-    os.remove(temp_path)
+    # Hapus file sementara
+    if os.path.exists(audio_data):
+        os.remove(audio_data)
 else:
-    st.info("📂 Silakan upload file audio terlebih dahulu.")
+    st.info("📂 Silakan upload atau rekam suara terlebih dahulu untuk memulai prediksi.")
